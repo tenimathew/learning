@@ -18,12 +18,14 @@ npx docusaurus start
 
 Open [http://localhost:3000](http://localhost:3000)
 
+edit docusaurus.config.js
+
 ```git
 git init
 git add .
 git commit -m "first commit"
-git push -u origin main
+git remote add origin git@github.com:tenimathew/learning.git
+git remote -v
+git push -u origin main --force
 GIT_USER=tenimathew yarn deploy
 ```
-
-Generate token for password
