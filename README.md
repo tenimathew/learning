@@ -20,6 +20,12 @@ Open [http://localhost:3000](http://localhost:3000)
 
 edit docusaurus.config.js
 
+baseUrl: "/learning/" //repo name
+organizationName: "tenimathew", // GitHub user name
+projectName: "learning", //repo name
+trailingSlash: false,
+deploymentBranch: "gh-pages",
+
 ```git
 git init
 git add .
