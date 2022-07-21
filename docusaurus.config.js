@@ -10,7 +10,7 @@ const config = {
   tagline: "Learn something new every day",
   url: "https://tenimathew.github.io/learning/",
   baseUrl: "/learning/",
-  onBrokenLinks: "throw",
+  onBrokenLinks: "warn", //"throw",
   onBrokenMarkdownLinks: "warn",
   favicon: "img/favicon.ico",
 
