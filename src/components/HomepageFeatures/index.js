@@ -16,6 +16,11 @@ const FeatureList = [
     description: "/learning/docs/category/oracle",
   },
   {
+    title: "Web Designing",
+    Svg: "img/webdesign.png",
+    description: "/learning/docs/category/webdesign",
+  },
+  {
     title: "HTML",
     Svg: "img/html.png",
     description: "/learning/docs/category/html",

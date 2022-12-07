@@ -4,12 +4,124 @@ sidebar_position: 27
 description: Basics
 ---
 
+## What is a schema?
+
+- Schemas are collections of objects for each user in Oracle database
+
+## Database and Instance
+
+## Architecture
+
+![](img/2022-11-12-21-40-04.png)
+
+### User Process
+
+- User who executes the query
+
+### PGA
+
+- Program global area/ Process global area/ Private global area.
+- It is a memory that is dedicated to a single user.
+- It is not a shared memory area
+  ![](img/2022-11-12-22-44-56.png)
+- Less memory for PGA will decrease the performance and large memory area will increase the performance
+- Oracle can automatically maintain it or you can assign the memory for PGA
+
+#### Session Area
+
+- Stores session information of each user
+- Stores session variables, login information, session status
+- They all use memory in database. So need to close all connection when you are done with the tranasction(when using java/.net also).
+
+#### Private SQL Area
+
+- Persistent Area
+  - Stores bind variables
+  - Each query is converted into a cursor in database
+- Runtime Area
+  - Execution state information. Ex:How much did we read from DB, Did it complete etc.
+
+#### Cursor Area
+
+- Stores information of cursors
+
+#### SQL Work Area
+
+- Sort, Group, Merge etc is done in this area.
+
+- Sort Area => Order by, Group by etc.
+- Hash Join Area
+- Bitmap Merge Area
+- Bitmap Create Area
+
+### SGA
+
+- Shared global area/System global area. It is an area that is shared among the users.
+
+### Shared Pool
+
+#### Data Dictionary Cache
+
+- When you execute a query, oracle has to check whether you have right privilage to access that table, whether the provided column names are valid etc.
+- So to make it faster, those table definitions are stored in this memory area.
+
+#### Result Cache
+
+- If the same statement is executed again and again it will store the result in this memory area.
+- Stores commonly used function results also
+- DB automatically stores it or you can define store or not to store our data.
+
+#### Library Cache
+
+- Library cache is the container and organiser of shared SQL area memory space.
+- Stores procedures, packages control structures also
+
+- Shared SQL Area
+  - SQL query execution plans are stored here. It will be shared among different users.
+
+### Buffer Cache
+
+- Largest memory area in SGA
+- Memory area that stores data blocks read from the disc for short period of time.
+- If some data is not available in Buffer Cache, it will read absent data blocks from disk
+-
+
+### Redo Log Buffer
+
+- Keeps initial value of the change. Used to for rollback.
+
 ## Logical Storage Structures
 
 ### Data blocks
 
-- Data blocks are the smallest units of storage that oracle can use or allocate. One logical data block corresponds to a specific number of bytes of physical disk space.
+- All the data is stored in blocks.
+- Data blocks are the smallest units of storage that oracle can use or allocate.
+- A block and have 2KB to 32KB size(8KB default)
+- One logical data block corresponds to a specific number of bytes of physical disk space.
 - Each operating system has what is called a block size. Oracle requests data in multiples of Oracle blocks, not operating system blocks. Therefore, you should set the Oracle block size to a multiple of the operating system block size to avoid unnecessary I/O. Usually 8 kb
+- A Block has block header and rows
+- Block header includes:
+  - Block type information(row data or index data)
+  - Table information
+  - Row directory (Address of each row) => ROWID
+    ![](img/2022-11-12-22-36-47.png)
+- Oracle leaves some space after each row to accomodate any updates or length increase on that row.
+- If the updated row is not able to occupy in the free space oracle allocated for each row, it will delete from that place and keep in other free space in same block.
+- If that block doesnt have free space, it will be written into another block
+- We can use **PCTFREE** or **PCTUSE** paramters to specify the space size in blocks while creating a table.
+- If we dont leave space after the row, each update will probably cause it to move to different place in same block or move to different block. This will cause performance issues. I/O operations will increase.
+- If this row moved from its original place, address will change and indexes will also has to be updated.
+- If two tables are clustered, another table's rows can come in the same block. Otherwise a block will contain only a single table's rows. Free spaces in that block will be used for new inserts.
+- Reading a tables row from single block will be faster than reading from multiple blocks
+- Row contains:
+  - Row Overhead
+  - Number of columns
+  - Cluster Key ID(if clustered)
+  - ROWID of Chained Row Pieces(if any)
+  - Column length
+  - Column value
+    ![](img/2022-11-12-22-40-39.png)
+- Before each column value, column length is defined. Reader process need to know where to start and where to end.
 
 ### Extents
 

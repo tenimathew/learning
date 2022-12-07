@@ -138,6 +138,7 @@ with table expression
 - Unbounded collection
 - Hold similar data type in key-value pair
 - Can access elements using numbers and strings as subscript values.
+- Keys does not need to be sequential
 - Similar to hash table in other languages.
 - Not need of initialization before assigning values to elements
 

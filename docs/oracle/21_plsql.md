@@ -4,6 +4,16 @@ sidebar_position: 21
 description: PLSQL
 ---
 
+## Procedure Oriented vs Object Oriented
+
+| On the basis of  | Procedure Oriented                                                           | Object Oriented                                                   |
+| ---------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| Definition       | It is a programming paradigm that is based on subroutines or procedure calls | It is a programming paradigm that is based on concept of objects  |
+| Security         | It is less secure than OOPS                                                  | Data hiding is possible in OOPs; hence it is more secure than POP |
+| Approach         | It follows top-down approach                                                 | It follows bottom-up approach                                     |
+| Access Modifiers | No access modifiers                                                          | Access modifiers in OOPs are PRIVATE, PUBLIC and PROTECTED        |
+| Features         | Modularity Predefined functions                                              | - Inheritance                                                     |
+
 ## What is PL/SQL?
 
 - Procedural Language/ Standard Query Language.
@@ -14,7 +24,7 @@ description: PLSQL
 ## Advantages of PL\SQL
 
 - Tight integration with SQL
-- Business logic can be directly implemented at database level
+- Business logic can be directly implemented at database level hence reduce network latency
 - High performance, High productivity
 - Support object oriented programming
 
@@ -164,6 +174,16 @@ SET AUTOPRINT ON --To turn on automatic printing of bind variable while assignin
 VNAME EMP.ENAME%TYPE;
 VEMP EMP%ROWTYPE; -- Record datatype variable
 ```
+
+## Naming Conventions
+
+|                   |                        |
+| ----------------- | ---------------------- |
+| Package - PKG\_   | Local Variable - LV\_  |
+| Procedure - PRC\_ | Global Variable - GV\_ |
+| Function - FNC\_  | Curosr - C\_           |
+| Exception - E\_   | Object - \_OBJ         |
+| Parameter - P\_   | Collections - \_TAB    |
 
 ## Execute Immediate
 

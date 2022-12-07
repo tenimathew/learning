@@ -21,6 +21,25 @@ RETURN (return_value);
 END;
 ```
 
+## Pipelined Function
+
+- Table function return a table of varray or nested tables
+- Regular tabel function returns after completing the whole data
+- Pipelined functions return each row one by one
+
+```sql
+CREATE [OR REPLACE] FUNCTION function_name (parameter1 datatype, parameter2 datatype,..)
+RETURN colleciton_datatype PIPELINED IS
+    --declare variables;
+BEGIN
+    FOR I IN 1..100 LOOP
+        PIPE ROW (object_datatype(value1,value2,..));
+    END LOOP;
+-- RETURN (return_value); -- No need to return any values as we are passing the result in each loop
+RETURN; -- As functions need a return, just return empty
+END;
+```
+
 ## Stored Procedures
 
 ```sql
@@ -192,6 +211,42 @@ IS
 BEGIN
     INSERT INTO departments VALUES (v_deptno);
 END;
+```
+
+## Persistent State of Packages
+
+```sql
+PRAGMA SERIALLY_REUSABLE
+```
+
+- This pragma is appropriate for packages that declare large temporary work areas that are used once and not needed during subsequent database calls in the same session.
+- You can mark a bodiless package as serially reusable. If a package has a spec and body, you must mark both. You cannot mark only the body.
+- The global memory for serially reusable packages is pooled in the System Global Area (SGA), not allocated to individual users in the User Global Area (UGA). That way, the package work area can be reused. When the call to the server ends, the memory is returned to the pool. Each time the package is reused, its public variables are initialized to their default values or to NULL.
+- Serially reusable packages cannot be accessed from database triggers or other PL/SQL subprograms that are called from SQL statements. If you try, Oracle generates an error.
+
+- The following example creates a serially reusable package:
+
+```sql
+CREATE PACKAGE pkg1 IS
+   PRAGMA SERIALLY_REUSABLE;
+   num NUMBER := 0;
+   PROCEDURE init_pkg_state(n NUMBER);
+   PROCEDURE print_pkg_state;
+END pkg1;
+/
+
+CREATE PACKAGE BODY pkg1 IS
+   PRAGMA SERIALLY_REUSABLE;
+   PROCEDURE init_pkg_state (n NUMBER) IS
+   BEGIN
+      pkg1.num := n;
+   END;
+   PROCEDURE print_pkg_state IS
+   BEGIN
+      dbms_output.put_line('Num: ' || pkg1.num);
+   END;
+END pkg1;
+/
 ```
 
 ## PL/SQL Triggers
