@@ -1,0 +1,1 @@
+"use strict";(self.webpackChunklearning=self.webpackChunklearning||[]).push([[1642],{7222:e=>{e.exports=JSON.parse('{"title":"WebDesign","slug":"/category/webdesign","permalink":"/learning/docs/category/webdesign","navigation":{"previous":{"title":"Commands","permalink":"/learning/docs/gcp/Commands"},"next":{"title":"Color","permalink":"/learning/docs/webdesign/Color"}}}')}}]);
