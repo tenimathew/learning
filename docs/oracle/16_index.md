@@ -6,10 +6,16 @@ description: Index
 
 ## Index
 
+![](img/2022-12-31-04-41-44.png)
+
+### B-TREE Indexes (Balanced Tree)
+
 ```sql
 CREATE INDEX index_name
 ON table_name(column1[,column2,...])
 ```
+
+![](img/2022-12-31-04-50-07.png)
 
 - The index name should be meaningful and includes table alias and column name(s) where possible, along with the suffix \_I such as:
 
@@ -21,7 +27,7 @@ ON table_name(column1[,column2,...])
 - When you create a new table with a primary key, Oracle automatically creates a new index for the primary key columns.
 - Unlike other database systems, Oracle does not automatically create an index for the foreign key columns.
 
-### DROP INDEX IF EXISTS
+##### DROP INDEX IF EXISTS
 
 ```sql
 DECLARE index_count INTEGER;
@@ -37,14 +43,14 @@ END;
 /
 ```
 
-## Unique Index
+##### Unique Index
 
 ```sql
 CREATE UNIQUE INDEX index_name ON
 table_name(column1[,column2,...]);
 ```
 
-### Specify name for index
+##### Specify name for index
 
 - When you define a `PRIMARY KEY` or a `UNIQUE` constraint for a table, Oracle automatically creates a unique index on the primary key or unique key columns to enforce the uniqueness
 - SYS_C007876 unique index was created automatically with the generated name.
@@ -61,26 +67,28 @@ CREATE TABLE t2 (
 
 - Instead of generating the index name, Oracle just used the one that we provided during table creation.
 
-## Function based Index
+#### Function based Index
 
 ```sql
 CREATE INDEX members_last_name_fi
 ON members(UPPER(last_name));
 ```
 
-### A function-based index has the following main advantages:
+##### A function-based index has the following main advantages:
 
 - A function-based index speeds up the query by giving the optimizer more chance to perform an index range scan instead of full index scan. Note that an index range scan has a fast response time when the `WHERE` clause returns fewer than 15% of the rows of a large table.
 - A function-based index reduces computation for the database. If you have a query that consists of expression and use this query many times, the database has to calculate the expression each time you execute the query. To avoid these computations, you can create a function-based index that has the exact expression.
 - A function-based index helps you perform more flexible sorts. For example, the index expression can call `UPPER()` and `LOWER()` functions for case-insensitive sorts or `NLSSORT()` function for linguistic-based sorts.
 
-### The following are major disadvantages of function-based indexes:
+##### The following are major disadvantages of function-based indexes:
 
 - The database has to compute the result of the index in every data modification which imposes a performance penalty for every write.
 - The function invoked involve in the index expression must be deterministic. It means that for the same input, the function always returns the same result.
 - The query optimizer can use a function-based index for cost-based optimization, not for rule-based optimization. Therefore, it does not use a function-based index until you analyze the index itself by invoking either `DBMS_STATS.GATHER_TABLE_STATS` or `DBMS_STATS.GATHER_SCHEMA_STATS`.
 
-## Bitmap Index
+### Bitmap Index
+
+![](img/2022-12-31-04-51-24.png)
 
 - When a column has a few distinct values, we say that this column has low cardinality. Ex: Gender column
 - Oracle has a special kind of index for these types of columns which is called a bitmap index.
@@ -95,7 +103,7 @@ CREATE BITMAP INDEX index_name
 ON table_name(column1[,column2,...]);
 ```
 
-### When to use Oracle bitmap indexes
+#### When to use Oracle bitmap indexes
 
 - You should use the bitmap index for the columns that have low cardinality. To find the cardinality of a column, you can use the following query:
 
@@ -139,3 +147,185 @@ The following error will occur:
 ```sql
 ORA-00060: deadlock detected while waiting for resource
 ```
+
+## Table Access Paths
+
+### Table Access Full (Full Table Scan)
+
+- Since one block has data from single table, once the server goes to that block (I/O operation), reading the whole block will be faster when you need to return big portion of the table
+- If DB_FILE_MULTIBLOCK_READ_COUNT = 1, then it reads only 1 block at a time
+- If it is DB_FILE_MULTIBLOCK_READ_COUNT = 4, it reads 4 blocks at a time and it speed up the reading process.
+- If we use index here, instead of full table scan, oracle need to jump to different different blocks according to the row id stored in indexes.
+
+#### Reasons for Full Table Scan
+
+- If there is not suitable index
+- If the selectivity is low
+- If the table is very small
+- If full table scan hint is used
+
+### Table Access by ROWID
+
+- Access by ROWID occurs when:
+  - ROWID is used in WHERE clause directly
+  - By and index scan operation
+
+Note: If we are selecting only the columns which are existing in index, that data will be taken directly from the index and not from table. If we take some other columns also - which are not part of index, it will convert index to ROWID and using ROWID, it will fetch from table.
+
+### Sample Table Scan
+
+## Index Access Paths
+
+### Index Unique Scan
+
+- A single row will be fetched.
+- This scan will be performed on primary key or unique index column
+
+### Index Range Scan
+
+- Can be applied to b-tree and bitmap indexes
+- Can be applied to unique, non-unique, function-based indexes
+- Normally data is stored in ascending order in the indexes. So, it will stop searching for other branches when it finds the last node.
+- If the query includes ORDER BY or GROUP BY clauses with indexing columns, range scan no need to do any sort as it is already sorted. Exceptions: if there are NULL values in column, it will do the sorting.
+
+```sql
+-- Order by with the indexed column -  sort is processed
+SELECT * FROM employees where employee_id > 190 order by email;
+
+-- Order by with the indexed column - no sort is processed
+SELECT * FROM employees where employee_id > 190 order by employee_id;
+```
+
+- If ORDER BY has DESC keyword, it will read the data in descending order. No need to sort here also.
+
+```sql
+-- Index range scan descending
+SELECT * FROM employees where department_id > 80 order by department_id desc;
+```
+
+- If you are using wildcard before the text or wilcard on both sides, it will not use range scan. If you using wildcard after the text, it will use range scan.
+
+```sql
+-- Index range scan with wildcard
+SELECT * FROM PRODUCTS WHERE PROD_SUBCATEGORY LIKE 'Accessories%';
+SELECT * FROM PRODUCTS WHERE PROD_SUBCATEGORY LIKE '%Accessories';
+SELECT * FROM PRODUCTS WHERE PROD_SUBCATEGORY LIKE '%Accessories%';
+```
+
+### Index Full Scan
+
+- Optimizer uses index full scan when:
+  - All the rows of the table are indexed
+  - If there is a ORDER BY or GROUP BY operation with the indexed columns,as index is already sorted it need not to sort it again.
+  - For ORDER BY, the order of the sorting should match the order the index is created. Ex: Index created with FIRST_NAME, LAST_NAME and query used order by LAST_NAME, FIRST_NAME, it will not use the index.
+  - For GROUP BY this order is not important.
+  - Query requires a sort-merge join
+
+```sql
+/* Index usage with order by */
+SELECT * FROM departments ORDER BY department_id;
+
+/* Index usage with order by, one column of an index - causes index full scan*/
+SELECT last_name,first_name FROM employees ORDER BY last_name;
+
+/* Index usage with order by, one column of an index - causes unnecessary sort operation*/
+SELECT last_name,first_name FROM employees ORDER BY first_name;
+
+/* Index usage with order by, but with wrong order - causes unnecessary sort operation */
+SELECT last_name,first_name FROM employees ORDER BY first_name,last_name;
+
+/* Index usage with order by, with right order of the index - there is no unncessary sort */
+SELECT last_name,first_name FROM employees ORDER BY last_name,first_name;
+
+/* Index usage with order by, wit unindexed column - there is no unncessary sort */
+SELECT last_name,first_name FROM employees ORDER BY last_name,salary;
+
+/* Index usage order by - when use * , it performed full table scan */
+SELECT * FROM employees ORDER BY last_name,first_name;
+
+/* Index usage with group by - using a column with no index leads a full table scan */
+SELECT salary,count(*) FROM employees e
+WHERE salary IS NOT NULL
+GROUP BY salary;
+
+/* Index usage with group by - using indexed columns may lead to a index full scan */
+SELECT department_id,count(*) FROM employees e
+WHERE department_id IS NOT NULL
+GROUP BY department_id;
+
+/* Index usage with group by - using more columns than ONE index has may prevent index full scan */
+SELECT department_id,manager_id,count(*) FROM employees e
+WHERE department_id IS NOT NULL
+GROUP BY department_id, manager_id;
+
+/* Index usage with merge join */
+SELECT e.employee_id, e.last_name, e.first_name, e.department_id,
+       d.department_name
+FROM   employees e, departments d
+WHERE  e.department_id = d.department_id;
+```
+
+### Index Fast Full Scan
+
+- If the query requires only the columns existing in the index, it uses IFF scan
+
+  | Index Full Scan                        | Index Fast Full Scan                                                |
+  | -------------------------------------- | ------------------------------------------------------------------- |
+  | IF scan may read from table too        | IFF scan always reads only from the index                           |
+  | Reads blocks one by one sequentially   | Reads multiple blocks simultaneously in unordered manner            |
+  | Faster than IFF is sorting is there    | Faster than IF Scan if sorting is not there                         |
+  | Can be used to eliminate extra sorting | As it is read in unordered manner, it cannot skip sorting if needed |
+
+### Index Skip Scan
+
+- If you dont use the indexed columns on the where clause, the optimizer will not use the indexes
+- If any column of a composite index is used as an access predicate, the optimizer will consider index skip scan
+- If you use the first column in the composite index as access predicate, it may perform index full scan or index range scan.
+- If you use any other column other than the first one, it may use IS scan
+- Below screenshot has index of GENDER and AGE column
+
+![](img/2022-12-31-17-21-42.png)
+
+```sql
+/*Index skip scan usage with equality operator*/
+SELECT * FROM employees WHERE first_name = 'Alex';
+
+/* Index range scan occurs if we use the first column of the index */
+SELECT * FROM employees WHERE last_name = 'King';
+
+/* Using index skip scan with adding a new index */
+SELECT * FROM employees WHERE salary BETWEEN 6000 AND 7000;
+CREATE INDEX dept_sal_ix ON employees (department_id,salary);
+DROP INDEX dept_sal_ix;
+
+/* Using index skip scan with adding a new index
+   This time the cost increases significantly */
+ALTER INDEX customers_yob_bix invisible; -- Disable the index
+SELECT * FROM customers WHERE cust_year_of_birth BETWEEN 1989 AND 1990;
+CREATE INDEX customers_gen_dob_ix ON customers (cust_gender,cust_year_of_birth);
+DROP INDEX customers_gen_dob_ix;
+ALTER INDEX customers_yob_bix visible;-- Enable the index
+```
+
+### Index Join Scan
+
+- If multiple indexes stores columns of a query, optimizer will join the indexes and read data from them. This is called Index join scan or index hash join scan.
+- All the columns in the select clause should be there in the combination of index to perform this
+- There is no join limit. More than two indexes can be joined. Mostly optimizer won't join more than two as its cost may increase than other execution plans
+- If you put ROWID in the select clause, it will not perform index join scan as it is not there in the column combination.
+- In index join scan, we can see a temporary view is created to join these indexes
+
+```sql
+/* Index join scan with two indexes */
+SELECT employee_id,email FROM employees;
+
+/* Index join scan with two indexes, but with range scan included*/
+SELECT last_name,email FROM employees WHERE last_name LIKE 'B%';
+
+/* Index join scan is not performed when we add rowid to the select clause */
+SELECT rowid,employee_id,email FROM employees;
+```
+
+### Index Organized Tables
+
+### Bitmap Access Paths

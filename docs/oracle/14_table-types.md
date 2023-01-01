@@ -1,8 +1,20 @@
 ---
-id: Section 14. Temporary Tables
+id: Section 14. Types of tables
 sidebar_position: 14
 description: Global temporary table, Private temporary table
 ---
+
+## Heap-Organized table
+
+- Most used table type
+
+## Index Clustered table
+
+## Hash Clustered table
+
+## Index-Organized table
+
+## External table
 
 ## Global temporary tables
 

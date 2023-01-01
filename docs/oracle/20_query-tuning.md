@@ -23,7 +23,7 @@ AS OF TIMESTAMP(SYSTIMESTAMP-INTERVAL '1' MINUTE);
 
 ## Hard parse vs. soft parse
 
-### Hard parse
+### Hard parse (Library cache miss)
 
 - If a session executes an SQL statement that does not exist in the shared pool, then Oracle has to do a hard parse.
 - Oracle must then:
@@ -32,9 +32,135 @@ AS OF TIMESTAMP(SYSTIMESTAMP-INTERVAL '1' MINUTE);
   - Check if the user trying to execute the statement has the necessary rights to execute it
 - A hard parse is expensive in both terms of CPU used and number of shared pool latch and library cache latch it needs to acquire and release. It should be avoided whenever possible.
 
-### Soft parse
+### Soft parse (Library cache hit)
 
 - If a session executes an SQL statement that exists in the shared pool and there is a version of the statement that can be used, then this is referred to as a soft parse.
+
+![](img/2022-12-24-17-17-36.png)
+
+### Optimization
+
+![](img/2022-12-29-17-02-51.png)
+
+- By default, optimizor need to find best plan under a second.
+
+![](img/2022-12-29-18-54-16.png)
+
+![](img/2022-12-29-18-55-00.png)
+
+#### Query transformer
+
+- Query transformer transforms the query into a better performing one but semantically equivalent of it.
+- If the transform isn't better, it uses the original one.
+- Time restriction and old statistics may lead wrong plan creation
+
+##### Methods of query transforming
+
+- **OR Expansion**: Using OR in query will prevent index usages
+
+```sql
+SELECT * FROM SALES WHERE PROD_ID = 14 or PROMO_ID = 33;
+```
+
+- This will be transformed into
+
+```sql
+SELECT * FROM SALES WHERE PROD_ID = 14
+UNION ALL
+SELECT * FROM SALES WHERE PROMO_ID = 33 AND PROD_ID <> 14;
+```
+
+- Then optimizer check cost of both original and transformed one and takes the one which has lower cost.
+
+- **Subquery Unnesting**: The optimizer transforms a nested query into a join statement
+
+```sql
+SELECT * FROM SALES WHERE CUST_ID IN
+    (SELECT CUST_ID FROM CUSTOMERS);
+```
+
+- This will be transformed into
+
+```sql
+SELECT * FROM SALES, CUSTOMERS
+WHERE SALES.CUST_ID = CUSTOMERS.CUST_ID;
+```
+
+- Here, if there is any index in CUST_ID, it will use that and it is not taking all the data from CUSTOMERS into memory to check CUST_ID
+
+- **Other Methods**: Complex View Merging, IN to EXISTS, Filter Pushdown etc.
+
+#### Selectivity and Cardinality
+
+![](img/2022-12-29-17-32-57.png)
+
+- If selectivity is close to 0 -> high selectivity (Less rows)
+- If selectivity is close to 1 -> low selectivity (big proportion of rows)
+- Selectivity affects the estimates in I/O cost
+- Selectivity affects the sort costs
+
+![](img/2022-12-29-17-35-32.png)
+
+- Cardinality is used to determine join, sort and filter costs
+- Incorrect selectivity and cardinality results in incorrect plan cost estimation
+
+- **Example**
+
+```sql
+SELECT * FROM SALES WHERE PROMO_ID = 999;
+```
+
+- Sales table has total 918843 rows
+- Above query returned 887837 rows
+
+```sql
+SELECT * FROM SALES WHERE PROMO_ID = 33;
+```
+
+- Above query returned 2074 rows
+- Suppose PROMO_ID column has 4 distinct values
+- Oracle does not know the actual number of resulting rows before executing. So, it takes an estimation of rows using distinct values for the column in WHERE clause. It will assume 1/NUM_DISTINCT rows will return in the result.
+- Selectivity = 1/4 = 25% of total rows
+- Cardinality = 918843 \* 1/4
+
+```sql
+SELECT NUM_DISTINCT FROM DBA_TAB_COLUMNS
+WHERE TABLE_NAME = 'SALES';
+```
+
+- So this is considered as low selectivity and go for full table scan.
+- But in our table, PROMO_ID = 33 has very less number of records
+- So the optimization plan selected by Oracle will not be efficient
+
+```sql
+SELECT * FROM SALES
+WHERE CUST_ID = 100001
+AND PROMO_ID = 999
+AND CHANNEL_ID = 9;
+```
+
+- Distinct value for CUST_ID is 7059 and CHANNEL_ID is 4
+- Then the selectivity becomes
+  ![](img/2022-12-29-18-02-23.png)
+
+#### Cost
+
+![](img/2022-12-29-18-08-28.png)
+
+- To estimate the cost, the estimator used:
+  - Disk I/O
+  - CPU usage
+  - Memory usage
+
+#### Row Source Generator
+
+- Row source is an area that we get the row set (Table, View, Result of join or groups)
+- Row source generator proceduces a row source tree (A collection of row sources)
+- Row source tree shows:
+  - Execution order
+  - Access methods
+  - Join methonds
+  - Data operations (filter, sort, ...)
 
 ### Identical Statements
 
@@ -257,9 +383,123 @@ EXEC DBMS_STATS.GATHER_TABLE_STATS(OWNNAME => 'HR',-
 
 ## Performance Tuning Tools
 
+### Generate Statistics
+
+- Oracle generate statistics automatically when it is idle
+- **System Statistics**:
+  - Used by the optimizer to estimate I/O and CPU costs
+  - System statistics are not calculated on daily basis as they are not changing. But DBA need to schedule this activity to gather system statistics regularly
+  - Based on the CPU and I/O speed Oracle can generate different execution plans
+  - If you have made any changes in hardware, you have to re-generate system statistics
+  - The workload of the database also affects the system statistics. So, it should be gathered during a normal workload
+
+```sql
+EXEC DBMS_STATS.GATHER_SYSTEM_STATS('START');
+EXEC DBMS_STATS.GATHER_SYSTEM_STATS('NOWORKLOAD');
+EXEC DBMS_STATS.GATHER_SYSTEM_STATS;
+
+SELECT * FROM SYS.AUX_STATS$;
+```
+
+- **Optimizer Statistics**:
+  - Can be gathered manually or automatically
+
+```sql
+ANALYZE TABLE <table_name> COMPUTE STATISTICS; -- Old method
+
+--New method
+EXEC DBMS_STATS.GATHER_DATABASE_STATS; -- All objects in a database
+EXEC DBMS_STATS.GATHER_DICTIONARY_STATS; -- Gather ststistics for dictionary schemas like SYS and SYSTEM schemas
+EXEC DBMS_STATS.GATHER_SCHEMA_STATS(OWNNAME => 'HR'); -- Only for a specific schema
+EXEC DBMS_STATS.GATHER_TABLE_STATS(OWNNAME => 'HR', TABNAME => 'SALES', CASCADE => TRUE); --Only for a specific table; Cascade: It will generate statistics for all the indexes associated with that table too. Recommended TRUE
+EXEC DBMS_STATS.GATHER_INDEX_STATS; -- For a specific index
+```
+
+- Statistics are stored in different different views
+  - DBA_TABLES --Table statistics
+  - DBA_TAB_STATISTICS --Table statistics
+  - DBA_TAB_COL_STATISTICS --Table column statistics
+  - DBA_INDEXES --Index statistics
+  - DBA_CLUSTERS --Cluster statistics
+  - DBA_TAB_PARTITIONS --Partitions statistics
+  - DBA_IND_PARTITIONS --Partition Index statistics
+  - DBA_PART_COL_STATISTICS --Partition column statistics
+
+### Explain Plan
+
+```sql
+EXPLAIN PLAN FOR <query>;
+```
+
+- It will generates the explain plan into PLAN_TABLE
+
+```sql
+SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY()); -- To make it more readable
+```
+
+- HASH value: When a query is run, a hash value is created for it and store that hash value and the execution plan as key-value pair in library cache
+
+```sql
+EXPLAIN PLAN SET STATEMENT_ID = 'MD_ID' FOR SELECT * FROM EMPLOYEES WHERE EMPLOYEE_ID = 100; -- Name/ID for the explain plan
+
+EXPLAIN PLAN SET STATEMENT_ID = 'MD_ID' INTO MYPLANTABLE FOR SELECT * FROM EMPLOYEES WHERE EMPLOYEE_ID = 100; -- Store plan to another table than PLAN_TABLE; Not useable
+```
+
+### Autotrace
+
+- This will show the execution plan
+
+```sql
+SET AUTOTRACE ON; --It will return statistics and explan pan
+
+SET AUTOTRACE ON [EXPLAIN|STATISTICS]; -- EXPLAN: return rows and Explain Plan; STATISTICS: return rows and statistics
+
+SET AUTOTRACE TRACE[ONLY] ON [EXPLAIN|STATISTICS]; -- ONLY is for semantic purpose; TRACE and TRACEONLY is same; This will show Explain plan or Statistics without rows
+
+SET AUTOTRACE OFF; -- Turn it off
+
+SHOW AUTOTRACE; -- See whether it is ON or OFF
+
+SELECT * FROM V$MYSTAT;
+```
+
+- Autotrace will also use PLAN_TABLE
+
+### V$SQL_PLAN
+
+- It is a dynamic performance view
+- **V$SQLAREA** : Has statistics of each SQL. Memory usage of the query when it is executed
+- **V$SQL_WORKAREA** : shows hash join area, sort area etc
+- **V$SQL** : Costs, parse counts, execution counts, logical and physicals reads, writes etc.
+- **V$SQL_PLAN** : Execution plans of queries including estimated statistics for each row source
+
+```sql
+SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY_CURSOR('5d456sds45er4f5')); -- To view the execution plan; Give SQL ID
+```
+
+- To find SQL ID we can check in V$SQL
+- If it is difficult to find your query from V$SQL, while executing, add some comment inside the query and search for it
+
+```sql
+SELECT /*my query*/ * FROM SALES;
+
+SELECT * FROM V$SQL WHERE SQL_TEXT LIKE '%my query%'
+```
+
+- **V$SQL_PLAN_STATISTICS** : Normally statistics level is set to TYPICAL. If you set it to ALL, this view will have some additional execution statistics
+- **V$SQL_PLAN_STATISTICS_ALL** : side by side comparision of optimizer estimates and actual execution statistics for the row sources
+
+### How to read Explain Plan
+
+![](img/2022-12-30-05-55-30.png)
+
+![](img/2022-12-30-06-15-39.png)
+
 ### Execution Plan:
 
 - It is the sequence of steps that the optimizer determines how to execute a SQL statement. Using Explain plan command, you can identify the execution plan oracle applies to a particular SQL statement.
+- Execution plan is more reliable than explain plan. Because, explain plan is created based on estimates and the explain plan modified on execution based on real time statistics is called execution plan.
+- Explain plan and Execution plan can be same or different depending upon the real time statistics
 
 ```sql
 EXPLAIN PLAN
@@ -667,6 +907,15 @@ ALTER TABLE employees PARALLEL 4;
 
 ## SQL Performance Tuning & Tips
 
+- Check statistics are up to date (STALE)
+- Using dynamic statistics
+- Rebuilding indexes
+- Index-organized tables
+- Check query structure
+- Check histograms
+- Check actual and estimated number of rows. If there is huge difference, then statistics might be out of date. Outdated statistics result in wrong selectivity and wrong execution plan.
+- See if cost and logical reads are significantly different. If the difference is huge, then there is a problem.
+- Check the datatype and any implicit type conversion happened
 - Ensure the OS has enough I/O bandwidth, CPU power and swap space (Swap space is the portion of virtual memory that is on the hard disk, used when RAM is full)
 - Operating systems, provide data caches which will consume memory while offering little or no performance benefit for the database. By default, all database I/O goes through the file system cache. On some Linux and UNIX systems, direct I/O is available which will allow the database files to be accessed by bypassing the file system cache. So it can save CPU resources and memory and allows file system cache to be dedicated to non-database activity.
 - But in some cases, database does not use the database buffer cache then the direct I/O may yield worst performance than using OS cache.
@@ -696,6 +945,12 @@ ALTER TABLE employees PARALLEL 4;
 - For queries that are executed on a regular basis, try to use procedures.
 - You can optimize bulk data loads by dropping indexes.
 - Oracle has many tools for managing SQL statement performance but among them two are very popular. These two tools are −
+  - `SQLT`
+  - `DBMS_STATS`
+  - `SQL Trace`
+  - `V$_SQL_PLAN`
+  - `DMS_MONITOR`
+  - `AWRSQRPT.SQL`
   - `EXPLAIN PLAN` − tool identifies the access path that will be taken when the SQL statement is executed.
   - `TKPROF` −SQL Trace generates a low level trace file that has a complete chronological record of everything a session is doing and waiting for when it “talks” to the database. `TKPROF` on the other hand takes that trace file and aggregates all of the low level details in an easy to read report. This report can then be quickly analyzed to find the root cause of the slow performance.
     Ex: TKPROF input.trc output.prd [options]
