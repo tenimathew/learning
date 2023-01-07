@@ -80,6 +80,9 @@ ORDER BY
 
 ## Left Join
 
+- In explain plan OUTER means left outer join and RIGHT OUTER means right outer join. Optimizer may choose either of them according to the performance even if we specify which is left and right table.
+  ![](img/2023-01-03-05-06-58.png)
+
 ```sql
 SELECT a.id id_a, a.color color_a, b.id id_b, b.color color_b
 FROM palette_a a
@@ -439,3 +442,35 @@ PARAMETERS(connectString,dt_in_trd_date,user,numout_inserted,numout_updated,retC
 - Web services are a set of functions packaged into a single entity made available to other systems on a network.
 - They can be shared and used as a component of distributed Web-based applications.
 - The network can be a corporate intranet or the Internet.
+
+## Semi Joins
+
+- Returns the rows mathing with the EXISTS sub query
+- Semijoin returns the first match
+- Semijoin is the way of transforming the EXISTS subquery into a join.
+- Sometimes the optimizer may select different methd than semijoin even if you use EXISTS subquery
+  ![](img/2023-01-03-05-16-26.png)
+
+## Anti Joins
+
+- Return the rows which does not match with the NOT IN subquery
+- By default antijoin are used with sort-merge joins
+- HASH_AJ or NL_AJ hints can be used to change the join method
+  ![](img/2023-01-03-05-20-53.png)
+
+```sql
+SELECT * FROM departments d WHERE department_id NOT IN
+  (SELECT department_id FROM employees e WHERE d.department_id = e.department_id);
+
+SELECT * FROM departments d WHERE NOT EXISTS
+  (SELECT 1 FROM employees e WHERE d.department_id = e.department_id);
+
+SELECT /*+ HASH_AJ */* FROM departments d WHERE NOT EXISTS
+  (SELECT 1 FROM employees e WHERE d.department_id = e.department_id);
+
+SELECT * FROM departments d WHERE NOT EXISTS
+  (SELECT /*+ HASH_AJ */1 FROM employees e WHERE d.department_id = e.department_id);
+
+SELECT * FROM employees e WHERE NOT EXISTS
+  (SELECT 1 FROM departments d WHERE d.department_id = e.department_id);
+```

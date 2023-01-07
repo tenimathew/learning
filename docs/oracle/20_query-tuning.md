@@ -790,8 +790,94 @@ ALTER TABLE employee MOVE PARTITION p21 TABLESPACE SYSAUX;
 
 - Hints are used to explicitly instruct the oracle optimizer to use certain execution plan rather than oracle chooses by itself.
 - More than one hints can be used at the same time.
+- If there are parameters in hint, we use space between the parameters. Comma is not required
+- You can use name or alias of the table. If there is an alias, you cannot use the table name.
 - Use the hints when you are absolutely sure that the hints lead to a significant performance boost.
 - Oracle recommends to use hints sparingly (less), and onlyafter you have collected statistics on the relevant tables and evaluated the optimizer plan without hints using the `EXPLAIN PLAN` statement.
+
+```sql
+--Examples
+
+/* A query without a hint. It performs a range scan*/
+SELECT employee_id, last_name
+  FROM employees e
+  WHERE last_name LIKE 'A%';
+
+/* Using a hint to command the optimizer to use FULL TABLE SCAN*/
+SELECT /*+ FULL(e) */ employee_id, last_name
+  FROM employees e
+  WHERE last_name LIKE 'A%';
+
+/* Using the hint with the table name as the parameter*/
+SELECT /*+ FULL(employees) */ employee_id, last_name
+  FROM employees
+  WHERE last_name LIKE 'A%';
+
+/* Using the hint with the table name while we aliased it*/
+SELECT /*+ FULL(employees) */ employee_id, last_name
+  FROM employees e
+  WHERE last_name LIKE 'A%';
+
+/* Using an unreasonable hint. The optimizer will not consider this hint */
+SELECT /*+ INDEX(EMP_DEPARTMENT_IX) */ employee_id, last_name
+  FROM employees e
+  WHERE last_name LIKE 'A%';
+
+/* Using multiple hints. But they aim for the same area. So unreasonable.
+   Optimizer picked full table scan as the best choice */
+SELECT /*+ INDEX(EMP_NAME_IX) FULL(e)  */ employee_id, last_name
+  FROM employees e
+  WHERE last_name LIKE 'A%';
+
+/* When we change the order of the hints. But it did not change the Optimizer's decision*/
+SELECT /*+ FULL(e) INDEX(EMP_NAME_IX)   */ employee_id, last_name
+  FROM employees e
+  WHERE last_name LIKE 'A%';
+
+/* There is no hint. To see the execution plan to compare with the next one */
+SELECT
+  e.department_id, d.department_name,
+  MAX(salary), AVG(salary)
+FROM employees e, departments d
+WHERE e.department_id=e.department_id
+GROUP BY e.department_id, d.department_name;
+
+/* Using multiple hints to change the execution plan */
+SELECT /*+ LEADING(e d)  INDEX(d DEPT_ID_PK) INDEX(e EMP_DEPARTMENT_IX)*/
+  e.department_id, d.department_name,
+  MAX(salary), AVG(salary)
+FROM employees e, departments d
+WHERE e.department_id=e.department_id
+GROUP BY e.department_id, d.department_name;
+
+/* Using hints when there are two access paths.*/
+SELECT /*+ INDEX(EMP_DEPARTMENT_IX) */ employee_id, last_name
+  FROM employees e
+  WHERE last_name LIKE 'A%'
+  and department_id > 120;
+
+/* When we change the selectivity of last_name search, it did not consider our hint.*/
+SELECT /*+ INDEX(EMP_DEPARTMENT_IX) */ employee_id, last_name
+  FROM employees e
+  WHERE last_name LIKE 'Al%'
+  and department_id > 120;
+
+/* Another example with multiple joins, groups etc. But with no hint*/
+SELECT customers.cust_first_name, customers.cust_last_name,
+  MAX(QUANTITY_SOLD), AVG(QUANTITY_SOLD)
+FROM sales, customers
+WHERE sales.cust_id=customers.cust_id
+GROUP BY customers.cust_first_name, customers.cust_last_name;
+
+/* Performance increase when performing parallel execution hint*/
+SELECT /*+ PARALLEL(4) */ customers.cust_first_name, customers.cust_last_name,
+  MAX(QUANTITY_SOLD), AVG(QUANTITY_SOLD)
+FROM sales, customers
+WHERE sales.cust_id=customers.cust_id
+GROUP BY customers.cust_first_name, customers.cust_last_name;
+```
+
+[Hints Cheet Sheet.pdf](Hints_Sheet.pdf)
 
 ### Hints for Optimization Approaches and Goals
 
@@ -982,3 +1068,347 @@ CMD>TKPROF C:\APP\diag\rdbms\orcl\orcl\trace\orcl_ora_11512.trc E:\orcl_ora_1151
 - If the use of the outline is enabled for the statement, then Oracle Database automatically considers the stored hints and tries to generate an execution plan in accordance with those hints.
 - Oracle Database can create a public or private stored outline for one or all SQL statements. T
 - he optimizer then generates equivalent execution plans from the outlines when you enable the use of stored outlines.
+
+## Optimizer Operators
+
+- These are the operations you see at the operations area in execution plan.
+- These operations are performed against row sources to generate the output with optimum performance.
+
+### Result Cache Operator
+
+- Result cache is a memory area in SGA to store the results of queries for some time to increase the performance
+- There are two ways to store results in result cache:
+  - MANUAL (DEFAULT - needs result_cache hint to store the result of that query in result cache)
+  - FORCE (It forces all the query results to be stored in result cache. It is not recommented as it is a limited memory area. no_results_cache hint is used to not to store the output in result cache)
+- DBMS_RESULT_CACHE package has statistics, information and some memory managing abilities
+- V$RESULT_CACHE_OBJECTS view has the result cache data. You can check whether your query is in result cache using this.
+- Table annotations can be used as the default storage option to the result cache. But hint will override table annotations. This also has DEFAULT and FORCE settings.
+- Table annotations:
+
+```sql
+CREATE TABLE table_name (...) RESULT_CACHE (MODE DEFAULT|FORCE);
+
+ALTER TABLE table_name (...) RESULT_CACHE (MODE DEFAULT|FORCE);
+```
+
+- Table annotations can be checked from USER_TABLES
+
+```sql
+SELECT RESULT_CACHE FROM USER_TABLES
+WHERE TABLE_NAME = 'SALES';
+```
+
+- To flush the result cache. It is not recommented to flush it unless you are testing:
+
+```sql
+EXEC DBMS_RESULT_CAHCE.FLUSH;
+```
+
+- The cost you see in below explain plan is, if the output is not available in result cache then that will be the cost. If it is reading from result cache, then the cost will be very minimal
+- SQL developer will show only the first 50 rows when you run a query. In order to store output in result cache, entire data to be fetched. To do that, select all or take count of data.
+  ![](img/2023-01-04-03-36-58.png)
+
+- Even if you change the query a little bit, it will not consider the results from result cache. It need to be exact.
+
+### View Operator
+
+- Every VIEW operator in the operations area does not mean that a view is there in the query
+- Each seperate query in a query is pretended as an inline view.
+- What is View Merging?
+  - View Merging means joining the inner query and the outer for a better performance
+- Every query inside the outer query is shown with VIEW operator if they cannot be merged with the outer query.
+
+```sql
+SELECT e.first_name, e.last_name, dept_locs_v.street_address,
+       dept_locs_v.postal_code
+FROM   employees e,
+      ( SELECT d.department_id, d.department_name,
+               l.street_address, l.postal_code
+        FROM   departments d, locations l
+        WHERE  d.location_id = l.location_id ) dept_locs_v
+WHERE  dept_locs_v.department_id = e.department_id
+AND    e.last_name = 'Smith';
+
+```
+
+- Above query is transformed to a join query by the optimizer as shown below.
+
+```sql
+select e.first_name, e.last_name, l.street_address, l.postal_code
+from employees e, departments d, locations l
+where d.location_id = l.location_id
+and d.department_id = e.department_id
+and e.last_name = 'Smith';
+```
+
+- We can use NO_MERGE hint to tell the optimizer no to join the tables. It need to be used for the inner query. If you put that in outer query, it will not work.
+
+```sql
+SELECT e.first_name, e.last_name, dept_locs_v.street_address,
+       dept_locs_v.postal_code
+FROM   employees e,
+      ( SELECT /*+ NO_MERGE */ d.department_id, d.department_name,
+               l.street_address, l.postal_code
+        FROM   departments d, locations l
+        WHERE  d.location_id = l.location_id ) dept_locs_v
+WHERE  dept_locs_v.department_id = e.department_id
+AND    e.last_name = 'Smith';
+```
+
+![](img/2023-01-04-03-53-33.png)
+
+- To execute above query, database needs to read all the rows of the inner query even if there are filter predicates. It will apply the predicated only after reading the entire table. So in order to improve the performance, the predicates from outer table is pushed to inner query to filter it while reading. That is called VIEW PUSHED PREDICATE.
+- For the above query, COST is 6 only but the bytes read is 100. So the merging the view is not efficient here.
+
+- Below query will use VIEW without we mentioning NO_MERGE hint because of GROUP BY clause.
+
+```sql
+select v.*,d.department_name from (select department_id, sum(salary) SUM_SAL
+from employees group by department_id) v, departments d
+where v.department_id=d.department_id;
+```
+
+- Even if we create a VIEW, it may not use VIEW operator if the view is a simple one. It will merge and shows the result. We can give NO_MERGE hint not to merge and read from VIEW also.
+
+```sql
+create view v as select department_id, salary from employees;
+
+select department_id, salary from v;
+
+drop view v;
+
+create view v as select /*+ NO_MERGE */ department_id, salary from employees;
+
+select department_id, salary from v;
+
+select department_id, salary from (select /*+ NO_MERGE */ department_id, salary from employees);
+
+select department_id, salary from employees;
+
+drop view v;
+
+select * from ALL_TAB_MODIFICATIONS;
+```
+
+### Clusters
+
+- The main goal of clustering is improving the performance with a different way of storage.
+- If two tables are always read together, we can cluster them and store them in same block area. So the cost of joining two tables will be reduced.
+- If two tables are always read together and uses equality operator, you can use clusters. Otherwise you may decrease the performance and higher cost if you try to make a full table scan.
+  ![](img/2023-01-04-04-09-49.png)
+- You need to know the cluster size accurately to create cluster tables. Otherwise, it will have lot of empty spaces and it may decrease the performance.
+- Types of clusters:
+  - **Index Clusters**: If two tables have same key, you can create index clusters.
+  - It stores cluser keys and place of the cluster.
+  - It will not store the rows inside it. So the database reads the whole cluster instead of single row.
+  - So the index clusters are useful when it reads multiple rows at the same time.
+  - The size of cluster indexes are smaller than regular indexes since they store the keys for multiple rows.
+  - **Hash Cluster**: It generates a hash value with cluster key and stores the data with the hash values.
+  - It is useful when equality or non-equality operations are performed.
+  - **Single table hash clusters**: In this, we can store only one table in a cluster.
+  - So, A cluster can have a single table as well
+  - It will be faster to read with equality operator. It is much faster then index unique scan. But if you use range scan, it will not be so useful. You can create an index on it so it can be fast on both unique and range scans.
+  - **Sorted hash clusters**:It is for reducing the cost of accessing the older data by using the hashing algorithm. Since the data in it is stored in sorted order with the hash key, it will be easy to perform a unique search. If your search is not equality search, it will not work.
+
+```sql
+-- Seperate storage is required to store clusters
+CREATE CLUSTER emp_dep_cluster (dep_id NUMBER(4,0)) -- dep_id is the Cluster key name. They don't need to be in same name as in the table, but it should have same data type
+    TABLESPACE users
+    STORAGE (INITIAL 250K     NEXT 50K ) -- If the initail 250K gets full, increase 50K and so on
+    HASH IS dep_id HASHKEYS 500; -- Hash Cluster; 500 is the value to specify the maximum unique hash key values that will be used for this cluster
+
+create table emps_clustered (
+    employee_id number(6,0) primary key,
+    first_name varchar2(20),
+    last_name varchar2(25),
+    department_id number(4,0)
+) cluster emp_dep_cluster (department_id); -- department_id column in table will be used as cluster key
+
+insert into emps_clustered (employee_id,first_name,last_name,department_id)
+select employee_id,first_name,last_name,department_id from employees;
+
+create table deps_clustered (
+    department_id number(4,0) primary key,
+    department_name varchar2(30)
+) cluster emp_dep_cluster (department_id);-- department_id column in table will be used as cluster key
+
+insert into deps_clustered (department_id,department_name)
+select department_id,department_name from departments;
+
+select employee_id,first_name,department_name from employees e, departments d
+where e.department_id = d.department_id
+and e.department_id = 80; -- Not clustered tables but same data. Cost is 4
+
+select employee_id,first_name,department_name from emps_clustered e, deps_clustered d
+where e.department_id = d.department_id
+and e.department_id = 80;-- clustered tables but same data. Cost is 0
+```
+
+![](img/2023-01-04-04-36-41.png)
+
+```sql
+
+select employee_id,first_name,department_name from emps_clustered e, deps_clustered d
+where e.department_id = d.department_id
+and e.department_id > 80;-- Clustered table using Non quality operator. Cost is 143
+
+select employee_id,first_name,department_name from employees e, departments d
+where e.department_id = d.department_id
+and e.department_id > 80;-- Non Clustered table using Non quality operator. Cost is 4
+
+
+select * from emps_clustered;-- Full table scan in clustered table will also reduce the performance. Cost 143
+
+drop table deps_clustered;
+drop table emps_clustered;
+drop cluster emp_dep_cluster;
+```
+
+### Sort Operators
+
+- Sort operator types:
+  - **SORT AGGREGATE operator**: It doesn't make real sort, but shows it as an aggregate sort.
+  - If you use COUNT or MIN function, you may see sort aggregate operator in the execution plan
+  - **SORT Unique operator**: If the database needs unique values of some set of rows, it can either group these rows and select one from each group or it can sort these rows and remove the duplicates.
+  - If it does in the second way, you will see the sort unique operator in execution plan
+  - **SORT join operator**: You will see this operator when a sort merge is applied to a row source. The smaller row source is sorted for merging the greater one. But sometimes, it sorts both or the big one.
+  - **SORT group by operator**: When you apply a GROUP BY operator, it need to sort the data to seperate the groups easily. So you will see this operator when the row source is grouped for some reason by the database itself or when you use GROUP BY operator.
+  - **SORT order by operator**: When you use ORDER BY clause, the database can handle it in two ways:
+    - If there is an index and if you need the data ordered by the indexed columns, it gets the data by using the index values. It is faster than the other one.
+    - If there is no index or you need the data ordered with a non-indexed column, then it performs and ordering to the row source. Then you will see SORT ORDER BY operator
+  - **Hash group by operator**: This operator is used since 10.2 version
+  - It mostly takes the place of SORT GROUP BY operator since it is faster than that.
+  - However, if your code includes and ORDER BY clause, database tend to use the SORT based GROUP BY instead of HASH based GROUP BY since it needs to sort the data anyway.
+  - **Hash unique operator**: Like the HASH GROUP BY, it takes the place of SORT UNIQUE operator. It is faster than the SORT based one.
+  - **Buffer sort operator**: If a table need to read multiple time for joins like cartesian join, database takes small tables(not a rule, it can take big table or both tables) and store the data into SORT area. So it can read much faster from there.
+  - So there is not sorting operation here. but since the source is stored in SORT area, it shows the BUFFER SORT in execution plan.
+- These sorts do not guarantee that you will have the rows in order. If you want the rows returned as ordered, you will have to use ORDER BY clause.
+
+```sql
+select distinct prod_id, cust_id from sales;
+
+select distinct prod_id, cust_id from sales order by prod_id;
+
+select prod_id, cust_id, sum(amount_sold) from sales
+group by prod_id,cust_id;
+
+select prod_id, cust_id, sum(amount_sold) from sales
+group by prod_id,cust_id
+order by prod_id;
+
+select prod_id, cust_first_name, amount_sold from sales, customers
+```
+
+### INLIST Operator
+
+- When we use IN clause, if the values in IN clause are not too many, the optimizer tends to use the INLIST Operator
+- For INLIST Operator usage, the search must be on the indexed columns
+- How does INLIST Operator work?
+  - It will performs multiple sorts for each value in IN clause and unions them at the end.
+  - If there are more values in IN clause, optimizer tends to use full table scan
+
+```sql
+select * from employees where employee_id in (100, 110, 146); -- INLIST
+
+select * from employees where employee_id in (100, 110, 146, 103, 124, 132, 102, 156, 187, 203, 177, 108, 123, 163, 104, 105, 188, 142, 151, 129, 109, 200, 130, 116, 104, 174, 152, 122, 155, 181, 133, 127, 158, 193, 140, 101, 119, 183, 152, 150, 119, 139); -- Uses full table scan
+
+select * from employees where employee_id = 100 or employee_id = 110 or employee_id = 146; -- First query actually transforms into this query while executing
+```
+
+### Count Stopkey Operator
+
+```sql
+select * from employees where rownum < 11;
+```
+
+![](img/2023-01-04-06-04-21.png)
+
+```sql
+select * from employees where rownum < 11 order by employee_id desc;
+
+select * from employees fetch first 10 rows only; -- Uses WINDOW (NOSORT STOPKEY); It read all the rows and used analytical function. So if you need to get some rows without any offset, recommened to use rownum < 11
+```
+
+![](img/2023-01-04-06-06-13.png)
+
+### First Row Operator
+
+- If the selected column is indexed and if index is in ascending order, the first value in the index will be the minimum value and last value will be the maximum value and vice versa.
+  ![](img/2023-01-04-06-11-44.png)
+
+- If we use MIN or MAX function, it will show SORT operation even if they are not sorted. Indexed column no need to sort.
+- If there are multiple MIN or MAX functions, it will not use FIRST ROW approach.
+- So, don't add other columns along with MIN and MAX for indexed columns. So you can get the result faster.
+
+```sql
+select min(employee_id) from employees where employee_id < 140;-- Same execution plan as below. uses FIRST ROW approach.
+
+select max(employee_id) from employees where employee_id < 140;-- Same execution plan as above. uses FIRST ROW approach.
+
+select min(employee_id) from employees; -- Read all the index but cardinality is 1 only. So it read only 1 row here also.
+
+select min(employee_id), max(employee_id) from employees where employee_id < 140;-- Here, cardinality is 40 at first. That means, it filtered out the rows with the condition and took min and max from that.
+
+select min(commission_pct) from employees where commission_pct < 0.1;--Full table scan as there is no index on this column
+```
+
+### Filter Operator
+
+![](img/2023-01-04-06-21-12.png)
+
+### Concatenation Operator
+
+```sql
+select * from employees where employee_id = 103 or department_id = 80; -- Here, optimizer read full table and filtered it
+
+select /*+ use_concat */* from employees where employee_id = 103 or department_id = 80;--Here, it reads the table two times and concat it together.
+```
+
+- LNNVL function returns TRUE if the predicate is NULL or FALSE. This is to eliminate the rows which are taken in the first step to avoid duplicates.
+  ![](img/2023-01-04-06-26-46.png)
+
+### UNION Operators
+
+```sql
+select * from employees where department_id = 80
+union
+select * from employees where first_name like 'A%'; -- eliminate duplicates; sorting needed. If there is index in the column, then sorting is not needed; it will take from index
+
+select * from employees where department_id = 80
+union all
+select * from employees where first_name like 'A%'; -- does not eliminate duplicates; sorting is not needed
+```
+
+### Intersect Operator
+
+- It need to sort to do the intersect.
+
+```sql
+SELECT * FROM employees WHERE department_id = 80
+INTERSECT
+SELECT * FROM employees WHERE first_name LIKE 'A%';
+
+SELECT * FROM employees where employee_id between 145 and 179 -- Employee IDs in department 80 is between 145 and 179. In this way it can use the index on employee_id column
+INTERSECT
+SELECT * FROM employees WHERE first_name LIKE 'A%';
+
+SELECT employee_id FROM employees where employee_id between 145 and 179
+INTERSECT
+SELECT employee_id FROM employees WHERE first_name LIKE 'A%'; -- Here, only indexed column is fetched, so faster than before
+
+SELECT employee_id FROM employees e where employee_id between 145 and 179
+and exists
+(SELECT employee_id FROM employees t WHERE first_name LIKE 'A%' and e.employee_id = t.employee_id); -- using EXISTS clause is faster than INTERSECT as it is not sorting.
+```
+
+### Minus Operator
+
+```sql
+SELECT employee_id FROM employees where employee_id between 145 and 179
+MINUS
+SELECT employee_id FROM employees WHERE first_name LIKE 'A%'; -- Similar to INTERSECT. Needs sorting
+
+SELECT employee_id FROM employees e where employee_id between 145 and 179
+and not exists
+(SELECT employee_id FROM employees t WHERE first_name LIKE 'A%' and e.employee_id = t.employee_id);-- using NOT EXISTS clause is faster than MINUS as it is not sorting.
+```
