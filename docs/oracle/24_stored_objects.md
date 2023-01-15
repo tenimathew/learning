@@ -186,6 +186,8 @@ END;
 
 ## One-time only procedure
 
+- This procedure will be executed only once per session.
+
 ```sql
 CREATE OR REPLACE PACKAGE BODY package_name IS
     --Functions, Procedures etc..

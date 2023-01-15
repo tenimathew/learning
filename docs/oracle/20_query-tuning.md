@@ -94,10 +94,12 @@ WHERE SALES.CUST_ID = CUSTOMERS.CUST_ID;
 
 ![](img/2022-12-29-17-32-57.png)
 
-- If selectivity is close to 0 -> high selectivity (Less rows)
-- If selectivity is close to 1 -> low selectivity (big proportion of rows)
+- If selectivity is close to 0 -> high selectivity (Less rows) Ex: Last Name column
+- If selectivity is close to 1 -> low selectivity (big proportion of rows) Ex: gender column.
 - Selectivity affects the estimates in I/O cost
 - Selectivity affects the sort costs
+- If the index is not selective, its cost might be higher than reading the whole table (Ex: Btree Index on Gender column).
+- For low selectivity columns, Bitmap indexes are better and for high selectivity, btree indexes are better
 
 ![](img/2022-12-29-17-35-32.png)
 
@@ -124,7 +126,7 @@ SELECT * FROM SALES WHERE PROMO_ID = 33;
 - Cardinality = 918843 \* 1/4
 
 ```sql
-SELECT NUM_DISTINCT FROM DBA_TAB_COLUMNS
+SELECT COLUMN_NAME, NUM_DISTINCT FROM DBA_TAB_COLUMNS
 WHERE TABLE_NAME = 'SALES';
 ```
 
@@ -377,7 +379,7 @@ EXEC DBMS_STATS.GATHER_TABLE_STATS(OWNNAME => 'HR',-
 - Oracle 11g Adaptive Cursor Sharing attempts to resolve this issue created by bind peeking.
 - In this, if the optimizer detects that a SQL might perform better with different execution plans when provided with different bind variables, it will mark the SQL as bind sensitive cursor.
 - So different execution plans are created for different bind variables.
-- Bind aware cursorsare bind sensitive cursors which are eligible to use different plans for different bind values.
+- Bind aware cursors are bind sensitive cursors which are eligible to use different plans for different bind values.
 - After a cursor has been made bind aware, the optimizer chooses plans for future executions based on the bind variable and its selective estimate.
 - If the database marks the cursor as bind aware, then the next time, it generates new plan for new bind variable and marks the original cursor generated for the statement as not sharable (IS_SHAREABLE = N in V$SQL) and the cursor is no longer will be useable and will be among the first to be expired out of the shared SQL area.
 
@@ -1264,6 +1266,79 @@ drop table emps_clustered;
 drop cluster emp_dep_cluster;
 ```
 
+#### Cluster Indexes
+
+- We can create indexes for clusters
+- We cannot create indexes for every clusters
+- We can create indexes for the index clusters
+- We cannot create indexes for hash-type clusters
+- Default cluster type is index cluster
+- We cannot make DML operations over the index-clustered tables before the index is created
+- Cluster indexes are stored in the index segment
+- Cluster indexes store the null values
+- Cluster indexes have entries for each cluster key value
+- Index Clusters cannot be used without the indexes
+
+```sql
+CREATE INDEX emp_dept _index
+ON CLUSTER emp_dep_cluster
+TABLESPACE USERS
+STORAGE (INITIAL 250K NEXT 50);
+```
+
+```sql
+--Hash Cluster
+CREATE CLUSTER emp_dep_cluster (dep_id NUMBER(4,0))
+TABLESPACE USERS
+STORAGE (INITIAL 250K NEXT 50K )
+HASH IS dep_id HASHKEYS 500;
+
+--After dropping Hash cluster, created index cluster
+CREATE CLUSTER emp_dep_cluster (dep_id NUMBER(4,0))
+TABLESPACE USERS
+STORAGE (INITIAL 250K NEXT 50K );
+
+CREATE TABLE emps_clustered (
+employee_id NUMBER(6,0) PRIMARY KEY,
+first_name VARCHAR2(20),
+last_name VARCHAR2(25),
+department_id NUMBER(4,0)
+) CLUSTER emp_dep_cluster (department_id);
+
+CREATE TABLE deps_clustered (
+department_id NUMBER(4,0) PRIMARY KEY,
+department_name VARCHAR2(30)
+) CLUSTER emp_dep_cluster (department_id);
+
+CREATE INDEX emp_dept_index
+ON CLUSTER emp_dep_cluster
+TABLESPACE USERS
+STORAGE (INITIAL 250K NEXT 50K);
+
+INSERT INTO emps_clustered (employee_id,first_name,last_name,department_id)
+SELECT employee_id,first_name,last_name,department_id FROM employees;
+
+INSERT INTO deps_clustered (department_id,department_name)
+SELECT department_id,department_name FROM departments;
+
+SELECT employee_id,first_name,department_name FROM emps_clustered E, deps_clustered D
+WHERE E.department_id = D.department_id
+AND E.department_id = 80;--Hash Cluster : Unique scan; Cost :1
+--Index Cluster : Cost 3
+
+SELECT employee_id,first_name,department_name FROM emps_clustered E, deps_clustered D
+WHERE E.department_id = D.department_id
+AND E.department_id > 80; -- Hash Cluster : Range scan: Cost: 143; Used full table scan
+--Index Cluster : Cost: 16
+
+SELECT * FROM emps_clustered;-- Hash Cluster : Cost: 143
+--Index Cluster : -- Cost: 9
+
+DROP TABLE deps_clustered;
+DROP TABLE emps_clustered;
+DROP CLUSTER emp_dep_cluster;
+```
+
 ### Sort Operators
 
 - Sort operator types:
@@ -1412,3 +1487,438 @@ SELECT employee_id FROM employees e where employee_id between 145 and 179
 and not exists
 (SELECT employee_id FROM employees t WHERE first_name LIKE 'A%' and e.employee_id = t.employee_id);-- using NOT EXISTS clause is faster than MINUS as it is not sorting.
 ```
+
+## Tuning Star Queries
+
+- A start schema is the simplest data warehouse schema. It is called star schea because the entity relationship diagram seems like a star. In the center, there is a table which is mostly the largest table or the most important table. They are called as fact table. All the tables are connected to this table. So it resembles start shape.
+- Likewise, if this logic is used in our queries, ie; if we join multiple tables with one main table, we call that query as star query. Star queries are generally costly since there are lots of joins in such queries.
+
+```sql
+create table sales_temp as select * from sales;
+create index sales_temp_pk on sales_temp (prod_id,cust_id,time_id,channel_id);
+
+select sum(amount_sold) from sales_temp
+where prod_id between 100 and 300
+and cust_id between 100 and 300; -- Performed full table scan; Cost 1232
+
+select sum(amount_sold) from sales_temp s, products p
+where s.prod_id = p.prod_id
+and p.prod_id between 100 and 300
+and s.cust_id between 100 and 300; -- Cost 356; Used indexes
+
+select /*+ index_rs ( sales_temp sales_temp_pk)*/sum(amount_sold) from sales_temp
+where prod_id between 100 and 300
+and cust_id between 100 and 300;-- Cost: 1406; Used skip scan instead of range scan
+
+select c.cust_last_name,s.amount_sold, p.prod_name, c2.channel_desc
+from sales s, products p, customers c, channels c2
+where s.prod_id = p.prod_id
+and s.cust_id = c.cust_id
+and s.channel_id = c2.channel_id
+and p.prod_id < 100
+and c2.channel_id = 2
+and c.cust_postal_code = 52773; -- Cost: 859
+
+alter session set star_transformation_enabled = true; -- Generally enabled for data warehouse
+
+select /*+ star_transformation fact(s)*/
+c.cust_last_name,s.amount_sold, p.prod_name, c2.channel_desc
+from sales s, products p, customers c, channels c2
+where s.prod_id = p.prod_id
+and s.cust_id = c.cust_id
+and s.channel_id = c2.channel_id
+and p.prod_id < 100
+and c2.channel_id = 2
+and c.cust_postal_code = 52773; -- Cost 478; fact(s) means Sales table is the fact table
+
+drop table sales_temp;
+```
+
+## Using bind variables
+
+- Using the BIND variables may increase the performance by decresing the parse counts.
+
+```sql
+-- Below queries will be considered as new query as the value is hardcoded. So hard parse is required
+select avg(salary) from employees where department_id = 30;
+select avg(salary) from employees where department_id = 40;
+select avg(salary) from employees where department_id = 50;
+
+select sql_id,executions,parse_calls,first_load_time,last_load_time,sql_text from v$sql
+where sql_text like '%avg(salary) from employees%'
+order by first_load_time desc;
+--Below query is using bind variable. So if the query is executed earlier, it will not hard parse next time.
+select avg(salary) from employees where department_id = :b;
+```
+
+```sql
+declare
+ v_dept_id number(2);
+ v_count number(2);
+begin
+    for r1 in (select department_id from departments) loop
+        select count(*) into v_count from employees where department_id = v_dept_id; --Oracle created bind variable for this to reduce hard parse
+    end loop;
+end;
+/
+
+--Below block made hard parses to fetch data.
+declare
+      type c1 is ref cursor;
+      r1 c1;
+      l_temp all_objects.object_name%type;
+  begin
+      for i in 1 .. 1000
+      loop
+          open r1 for
+          'select object_name from all_objects where object_id = ' || i;
+          fetch r1 into l_temp;
+          close r1;
+      end loop;
+  end;
+/
+
+```
+
+![](img/2023-01-15-04-20-19.png)
+
+```sql
+--Using bind variable to tune above query
+declare
+      type c1 is ref cursor;
+      r1 c1;
+      l_temp all_objects.object_name%type;
+  begin
+      for i in 1 .. 1000
+      loop
+          open r1 for
+          'select object_name from all_objects where object_id = :x' using i;
+          fetch r1 into l_temp;
+          close r1;
+      end loop;
+end;
+/
+```
+
+![](img/2023-01-15-04-22-10.png)
+
+```sql
+--Tuning further
+declare
+      l_temp all_objects.object_name%type;
+  begin
+      for r1 in (select object_name from all_objects where object_id < 1001) loop
+        l_temp := r1.object_name;
+      end loop;
+  end;
+```
+
+![](img/2023-01-15-04-23-15.png)
+
+## Bind Variable peeking
+
+- The optimizer peeks the bind variable values for the first execution. It does not create the plan directly. Because the plan may change based on the value. Some values may be selective some may be not selective enough.
+- After the first execution, plan is generated, it uses that plan for the next executions. This is called cursor sharing. So it does not peeks it for next executions until you restart the DB.
+- This may cause the optimizer to select suboptimal plans for the next execution
+- Why not it peeks for all the values?
+  - To eliminate the hard parses
+- When to use the bind variables then?
+  - Don't use the bind variables if the cardinality of the values in the column is pretty different. Like for some values, it fetches 1000 rows and some values it fetches 5 rows etc.
+  - If the cardinalities are pretty similar and they all will need the same plan, use bind variables
+
+```sql
+CREATE TABLE customers_temp AS SELECT * FROM customers;
+
+SELECT COUNT(*),cust_credit_limit FROM customers_temp
+GROUP BY cust_credit_limit
+ORDER BY COUNT(*);
+```
+
+![](img/2023-01-15-04-32-29.png)
+
+```sql
+DELETE FROM customers_temp WHERE cust_credit_limit = 15000 AND ROWNUM < 1860;
+COMMIT; -- Delete some rows to make the result more significant
+
+CREATE INDEX c_temp_ix ON customers_temp(cust_credit_limit);
+
+BEGIN
+    dbms_stats.gather_table_stats(ownname => 'SH', tabname => 'CUSTOMERS_TEMP',
+    method_opt  => 'for columns size 254 CUST_CREDIT_LIMIT', CASCADE=>TRUE);
+END;
+
+SELECT * FROM customers_temp WHERE cust_credit_limit = 1500;--Full table scan --Cost: 405
+SELECT * FROM customers_temp WHERE cust_credit_limit = 15000;--Index range scan; Cost: 3
+
+SELECT * FROM customers_temp WHERE cust_credit_limit = :b;
+--For 1500, it used full table scan and cost is 405
+--For 15000, it used full table scan and cost is 405
+
+DROP TABLE customers_temp;
+```
+
+## Cursor sharing
+
+- The lifecycle of a query:
+  - Open : Allocates memory for that cursor
+  - Parse: Syntax analysis, semantic analysis, privilege checks etc
+  - Bind : Bind variable values are assigned
+  - Define : Defines how you want to see the data
+  - Execute
+  - Fetch
+- The data structure allocated in the database for that query is called as cursor in the server side
+- Using these cursors by multiple executions is called as cursor sharing
+- Parent cursor stores the SQL statement and child stores the information related to the differences
+- When the database can share the cursors?
+  - When Bind variables are used
+  - Only if the literals are different
+- CURSOR_SHARING parameter should be set to :
+  - EXACT : The default cursor_sharing parameter. It allows cursor sharing only if the queries are exactly the same.
+  - FORCE : Allows cursor sharing if everything but literals are the same. But it is not guaranteed.
+    - Needs extra work to find a similar statements in the shared pool during the soft parse
+    - It needs to use more memory
+    - Star transformation is not supported
+- The cursor sharing can be set by alter session or alter system commands
+
+```sql
+ALTER SYSTEM FLUSH SHARED_POOL;--Using SYS user
+
+--Using HR schema user
+ALTER SESSION SET cursor_sharing = 'EXACT';
+--ALTER SESSION SET cursor_sharing = 'FORCE';
+
+SELECT * FROM employees WHERE first_name = 'Alex';
+SELECT * FROM employees WHERE first_name = 'Lex';
+SELECT * FROM employees WHERE first_name = 'David';
+
+SELECT * FROM employees WHERE first_name LIKE 'A%';
+SELECT * FROM employees WHERE first_name LIKE 'B%';
+SELECT * FROM employees WHERE first_name LIKE 'C%';
+
+SELECT * FROM employees WHERE employee_id = 102;
+SELECT * FROM employees WHERE employee_id = 125;
+SELECT * FROM employees WHERE employee_id = 166;
+SELECT * FROM employees WHERE employee_id = 102;
+
+SELECT * FROM employees WHERE salary > 1500;
+SELECT * FROM employees WHERE salary > 15000;
+SELECT * FROM employees WHERE salary > 20000;
+
+VARIABLE b NUMBER;
+EXEC :b := 1000;
+SELECT * FROM employees WHERE salary > :b;
+EXEC :b := 20000;
+SELECT * FROM employees WHERE salary > :b;
+
+set linesize 2000;
+
+SELECT sql_id,child_number,executions,loads,parse_calls,sql_text
+FROM v$sql WHERE sql_text LIKE 'SELECT * FROM employees WHERE first_name =%';
+
+SELECT sql_id,child_number,executions,loads,parse_calls,sql_text
+FROM v$sql WHERE sql_text LIKE 'SELECT * FROM employees WHERE first_name LIKE%';
+
+SELECT sql_id,child_number,executions,loads,parse_calls,sql_text
+FROM v$sql WHERE sql_text LIKE 'SELECT * FROM employees WHERE employee_id =%';
+
+SELECT sql_id,child_number,executions,loads,parse_calls,sql_text
+FROM v$sql WHERE sql_text LIKE 'SELECT * FROM employees WHERE salary >%';
+```
+
+## Adaptive Cursor sharing
+
+- Released on 11g
+- The main goal of adaptive cursor sharing is, not to have a new cursor for each bind value, but not to use the same cursor for every query also.
+- Enabled by default . You cannot disable it easily and not recommended to disable it also. (It is applied automatically if the query does not have over 14 bind variables)
+- It is independent of CURSOR_SHARING parameter
+- Benefits of adaptive cursor sharing :
+  - It automatically detects if the query needs another execution plan or can use the existing one
+  - Decreases the number of generated child cursors to minimum
+  - It works automatically. You don't need to start it
+- How it works:
+
+  - When you first execute the query, it performs a hard parse as usual
+  - If the cursor has histograms to compute the selectivity, the cursor is marked as bind sensitive cursor.
+  - Bind sensitive cursor basically measn this cursor has a bind variable. So this is a candidate to adaptive cursor sharing.
+  - So when you execute that query, the selectivity interval is stored in a table by database automatically.
+  - When you execute the same query again with or without a new bind variable, it compares the new selectivity and the interval of previous plan which is stored in the table.
+  - If the new selectivity is out of that interval, it marks that cursor as bind aware cursor
+  - This means the selectivity of that query may vary based on different values.
+  - So on the next execution, it do hard parsing and generates new plan. If the plan is same as previous plan, instead of keeping same plan twice, it enlarges the selectivity interval with max and min values. So the child cursor created for the hard parse is merged with the previous one.
+  - If the plan does not matches, it create another interval and plan for that.
+
+- Useful views for adaptive cursor sharing :
+  - V$SQL- Stores if the query is bind sensitive or bind aware
+  - V$SQL_CS_SELECTIVITY - Stores the lowest and highest acceptable selectivity values
+  - V$SQL_CS_STATISTICS - Stores some extra info like buffer gets, CPU time, etc.
+  - V$SQL_CS_HISTOGRAM - Stores the histogram statistics of the queries using bind variables
+- Hints about adaptive cursor sharing :
+  - BIND_AWARE - Makes the database skip monitoring that query to check bind-sensitivity
+  - NO_BIND_AWARE - Makes the database ignore that query for bind-sensitiveness
+
+```sql
+ALTER SYSTEM FLUSH SHARED_POOL;
+
+
+SELECT COUNT(*),country_id FROM customers GROUP BY country_id order by count(*);
+CREATE TABLE customers_temp AS SELECT * FROM customers;
+CREATE INDEX cost_temp_country_id ON customers_temp(country_id);
+
+BEGIN
+dbms_stats.gather_table_stats(ownname => 'SH', tabname => 'CUSTOMERS_TEMP',
+method_opt => 'for columns size 254 COUNTRY_ID', CASCADE=>TRUE);
+END;--This will create histograms also
+
+VARIABLE country_id NUMBER;
+EXEC :country_id := 52787;
+SELECT * FROM customers_temp WHERE country_id = :country_id;
+EXEC :country_id := 52790;
+SELECT * FROM customers_temp WHERE country_id = :country_id;
+EXEC :country_id := 52770;
+SELECT * FROM customers_temp WHERE country_id = :country_id;
+EXEC :country_id := 52788;
+SELECT * FROM customers_temp WHERE country_id = :country_id;
+EXEC :country_id := 52790;
+SELECT * FROM customers_temp WHERE country_id = :country_id;
+
+SELECT * FROM TABLE(dbms_xplan.display_cursor(NULL,NULL,'TYPICAL +PEEKED_BINDS')); -- +PEEKED_BINDS will show peeking bind variables
+
+SELECT sql_id,child_number,executions,loads,parse_calls,is_bind_sensitive,is_bind_aware,sql_text
+FROM v$sql WHERE sql_text LIKE 'SELECT * FROM customers_temp WHERE country_id =%';
+
+SELECT hash_value,sql_id,child_number,range_id,LOW,HIGH,predicate
+FROM v$sql_cs_selectivity;
+
+DROP TABLE customers_temp;
+```
+
+## Adaptive Plans
+
+The statistics used by the optimizer:
+
+- Table Statistics: Uses this to determine the cost of table scans and joins. Stored in DBA_TAB_STATISTICS
+  - Number of rows
+  - Number of blocks
+- Column Statistics: Generate cardinality of the columns. Stored in DBA_TAB_COL_STATISTICS
+  - Number of distinct values in that column
+  - Number of NULL values in that column
+  - Data distribution statistics (Histograms)
+  - Extended statistics
+- Index Statistics: Number of index levels and relationship of index and table. Stored in DBA_IND_STATISTICS
+  - Number of leaf blocks
+  - Number of branch levels
+  - Number of distinct keys
+  - Index clustering factor
+- System Statistics:
+
+  - I/O performance
+  - CPU performance
+
+- Before database version 12c the execution plan was determined before the execution and this plan was applied
+- Starting with 12c the optimizer can change the plan on runtime.
+- While executing the query, the statistics collector gathers some new statistics about cardinality and histograms
+- If the new statistics do not match with the first statistics, the optimizer picks one of its sub-plans it stored
+- It writes 'This is an adaptive plan' on the execution plan to express that.
+- Adaptive plans are enabled by default
+
+```sql
+ALTER SYSTEM FLUSH SHARED_POOL;
+
+SELECT COUNT(*)
+FROM sales S, products P, customers C
+WHERE S.prod_id = P.prod_id
+AND S.cust_id = C.cust_id;
+
+SELECT * FROM TABLE(dbms_xplan.display_cursor());
+```
+
+![](img/2023-01-15-05-37-37.png)
+
+```sql
+SELECT * FROM TABLE(dbms_xplan.display_cursor(FORMAT => 'adaptive'));
+```
+
+![](img/2023-01-15-05-39-05.png)
+
+```sql
+SELECT /*+ GATHER_PLAN_STATISTICS */COUNT(*)
+FROM sales S, products P, customers C
+WHERE S.prod_id = P.prod_id
+AND S.cust_id = C.cust_id;--Hint make to calculate whole statistics
+
+SELECT * FROM TABLE(dbms_xplan.display_cursor(FORMAT => 'adaptive allstats last'));
+```
+
+![](img/2023-01-15-05-42-56.png)
+
+## Dynamic Statistics
+
+- Starting with 10g, dynamic sampling is introduced. It allows the optimizer to gather additional information at the parse time. It is not same as adaptive plan.
+- Dynamic sampling gathers the statistics by some recursive calls before generating the plan
+- Scans a fraction of random samples from the table blocks and calculates the statistics based on these random blocks
+- You can control the dynamic sampling with :
+
+```sql
+ALTER SYSTEM SET OPTIMIZER_DYNAMIC SAMPLING = 4;--not recommented
+ALTER SESSION SET OPTIMIZER_DYNAMIC SAMPLING = 9;
+/*+ DYNAMIC SAMPLING(11) */
+```
+
+- Before 12c, the dynamic sampling level can be set to between O to 10 (Default is 2)
+- Dynamic sampling is renamed to dynamic statistics in 12C and beyond.
+- New level 11 introduced in 12C has automatic sampling
+- Why to use dynamic statistics?
+  - If the current statistics are not enough to create an optimal plan
+  - If the query is executed multiple times
+  - If the time for gathering the dynamic statistics is ignorable compared to the overall execution time
+- When to use dynamic statistics?
+  - Statistics are missing
+  - Statistics are stale (10% or more changes happened in the table after last statistics gathering)
+  - Statistics are insufficient
+  - There is a parallel execution
+  - There is a SQL Plan directive - used in adaptive plan also
+
+```sql
+ALTER SYSTEM FLUSH SHARED_POOL;
+
+
+CREATE TABLE customers_temp AS SELECT * FROM customers;
+CREATE INDEX cost_prov_ix ON customers_temp(cust_city,cust_state_province);
+
+SELECT /*+ GATHER_PLAN_STATISTICS */ * FROM customers_temp
+WHERE cust_city='Los Angeles' AND cust_state_province='CA';
+
+SELECT * FROM TABLE(dbms_xplan.display_cursor(FORMAT => 'allstats last'));
+```
+
+- SQL Developer fetched first 50 rows first. Without executing whole query, it wont generate the plan. So it will show below error if we try to do so.
+
+![](img/2023-01-15-05-55-00.png)
+![](img/2023-01-15-05-57-37.png)
+
+```sql
+SELECT /*+ GATHER_PLAN_STATISTICS dynamic_sampling(1) */ * FROM customers_temp
+WHERE cust_city='Los Angeles' AND cust_state_province='CA'; -- Estimated rows are very less than actual rows
+
+SELECT /*+ GATHER_PLAN_STATISTICS dynamic_sampling(4) */ * FROM customers_temp
+WHERE cust_city='Los Angeles' AND cust_state_province='CA';-- Estimated rows are higher than actual rows. So it chose full table scan
+
+
+SELECT /*+ GATHER_PLAN_STATISTICS dynamic_sampling(7) */ * FROM customers_temp
+WHERE cust_city='Los Angeles' AND cust_state_province='CA';-- Better than before. But not accurate.
+
+
+SELECT /*+ GATHER_PLAN_STATISTICS dynamic_sampling(10) */ * FROM customers_temp
+WHERE cust_city='Los Angeles' AND cust_state_province='CA'; -- Estimated rows are same as actual rows
+
+SELECT /*+ GATHER_PLAN_STATISTICS dynamic_sampling(11) */ * FROM customers_temp
+WHERE cust_city='Los Angeles' AND cust_state_province='CA'; -- Better than sampling 4. But not upto 7.
+
+DROP TABLE customers_temp;
+```
+
+- Here it will show the level of the sampling.
+  ![](img/2023-01-15-06-02-28.png)
+
+--The dynamic sampling levels and their meanings
+https://docs.oracle.com/database/121/TGSQL/tgsql_astat.htm#TGSQL451

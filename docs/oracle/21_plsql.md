@@ -56,6 +56,13 @@ END;
 
 ## PL/SQL data types
 
+PL/SQL data types are divided into 4 types:
+
+- Scalar
+- Reference
+- Large Objects
+- Composite
+
 PL/SQL divides the scalar data types into four families:
 
 - Number
@@ -181,7 +188,8 @@ VEMP EMP%ROWTYPE; -- Record datatype variable
 | ----------------- | ---------------------- |
 | Package - PKG\_   | Local Variable - LV\_  |
 | Procedure - PRC\_ | Global Variable - GV\_ |
-| Function - FNC\_  | Curosr - C\_           |
+| Function - FNC\_  | Cursor - C\_ or CUR\_  |
+| Constants - C\_   | Bind variable - B\_    |
 | Exception - E\_   | Object - \_OBJ         |
 | Parameter - P\_   | Collections - \_TAB    |
 

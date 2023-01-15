@@ -88,8 +88,8 @@ CREATE TABLE float_demo (
 
 ```sql
 SELECT
-    10.2d,
-    32.7f
+    10.2d,-- Binary Double
+    32.7f -- Binary Float
 FROM
     dual;
 ```
@@ -101,8 +101,6 @@ The following are the major differences between FLOAT data type and floating-poi
 - The floating-point data types take advantage of hardware acceleration, therefore, they have better performance for numerical computations.
 - The floating-point data types can store smaller / larger numbers than `FLOAT` type.
 - The floating-point data types store only approximate values, while the `FLOAT` data type stores exact values.
-
-
 
 ## Datetime and Interval data types
 

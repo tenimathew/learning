@@ -4,6 +4,8 @@ sidebar_position: 25
 description: Collections
 ---
 
+## Records
+
 ## Nested Tables
 
 - Persistent collection -Stores data and structure physically into the database as database object

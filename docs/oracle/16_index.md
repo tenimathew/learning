@@ -79,6 +79,35 @@ ON members(UPPER(last_name));
 - A function-based index speeds up the query by giving the optimizer more chance to perform an index range scan instead of full index scan. Note that an index range scan has a fast response time when the `WHERE` clause returns fewer than 15% of the rows of a large table.
 - A function-based index reduces computation for the database. If you have a query that consists of expression and use this query many times, the database has to calculate the expression each time you execute the query. To avoid these computations, you can create a function-based index that has the exact expression.
 - A function-based index helps you perform more flexible sorts. For example, the index expression can call `UPPER()` and `LOWER()` functions for case-insensitive sorts or `NLSSORT()` function for linguistic-based sorts.
+- We can use any type of functions (built-in or user-defined)
+- We can use multiple functions in a column or in multiple columns
+- The restrictions:
+  - The function needs to be deterministic. Random values or SYSDATE etc cannot be used.
+  - Aggregate functions cannot be used
+  - Function needs to have a fixed-length data type
+
+```sql
+SELECT * FROM employees;
+SELECT * FROM employees WHERE last_name = 'KING';
+SELECT * FROM employees WHERE UPPER(last_name) = 'KING';--Faster when created below function based index
+
+CREATE INDEX last_name_fix ON employees (UPPER(last_name));
+SELECT * FROM employees WHERE UPPER(substr(last_name,1,1)) = 'K';--Did not use the index as there is no function based index that uses substr here.
+DROP INDEX last_name_fix;
+
+CREATE INDEX last_name_fix ON employees (UPPER(substr(last_name,1,1)));
+SELECT * FROM employees WHERE UPPER(substr(last_name,1,1)) = 'K';--Used the index as this function based index is created in previous step.
+SELECT * FROM employees WHERE UPPER(substr(last_name,1,2)) = 'KI';--Did not use the index as there is no function based index that uses substr(1,2) here. For substr(1,1) only we created the index
+DROP INDEX last_name_fix;
+
+CREATE INDEX annual_salary_fix ON employees(salary*12-300); -- Function based index with arithmetic operations
+SELECT * FROM employees WHERE salary > 10000; -- Did not use index
+SELECT * FROM employees WHERE salary*12 > 10000; -- Did not use index
+SELECT * FROM employees WHERE salary*12-300 > 10000;-- Used the index as we created the index like that only
+SELECT * FROM employees WHERE salary*12-301 > 10000+1; -- Did not use index
+DROP INDEX annual_salary_fix;
+
+```
 
 ##### The following are major disadvantages of function-based indexes:
 
@@ -97,11 +126,149 @@ ON members(UPPER(last_name));
 - Each index key stores pointers to multiple rows.
 - For gender column, It will create two separate bitmaps, one for each gender.
 - Oracle uses a mapping function to converts each bit in the bitmap to the corresponding rowid of the table.
+- Works faster than B-tree index for large number of rows in the result set
+- Uses less disc space than the B-tree indexes.
+  - It doesn't store values for each row.
+  - It doesn't store all the rowids. Instead it stores the intervals and then converts when it needs.
+  - Bitmaps are stored in compressed manner
+- Bitmap conversion needs more CPU usage then B-tree indexes
+- Bitmap is efficient when query contains multiple conditions in the WHERE clause
+
+  ```sql
+  CREATE TABLE customers_temp AS SELECT * FROM customers;
+  -- B-Tree Index
+  CREATE INDEX cust_city_ix ON customers_temp(cust_city);
+  CREATE INDEX cust_name_ix ON customers_temp(cust_first_name,cust_last_name);
+
+  SELECT * FROM customers_temp WHERE cust_city IN ('Aachen','Abingdon','Bolton','Santos');--Used index; Cost: 338
+  SELECT * FROM customers_temp WHERE cust_city IN ('Aachen','Abingdon','Bolton','Santos','Barry','Westminster','Tilburg');--Did not use index. It used full table scan. If there are more than 6 values in IN clause, it tend to use full table scan; Cost: 406
+  SELECT * FROM customers_temp WHERE cust_city IN ('Aachen','Abingdon','Bolton','Santos') AND cust_first_name = 'Abigail';--One more condition added. Converted b-tree index to bitmap index and reduced the cost; Cost: 7
+  SELECT /*+ index(c cust_name_ix, cust_name_ix)*/* FROM customers_temp C WHERE cust_city IN ('Aachen','Abingdon','Bolton','Santos') AND cust_first_name = 'Abigail';--Cost is more than previous one;Cost: 9
+
+  DROP INDEX cust_city_ix;
+  DROP INDEX cust_name_ix;
+  --Bitmap index
+  CREATE BITMAP INDEX cust_city_bix ON customers_temp(cust_city);
+  CREATE BITMAP INDEX cust_name_bix ON customers_temp(cust_first_name,cust_last_name);
+
+  SELECT * FROM customers_temp WHERE cust_city IN ('Aachen','Abingdon','Bolton','Santos');--Cost 81
+  SELECT * FROM customers_temp WHERE cust_city IN ('Aachen','Abingdon','Bolton','Santos','Barry','Westminster','Tilburg');--Cost: 133
+  SELECT * FROM customers_temp WHERE cust_city IN ('Aachen','Abingdon','Bolton','Santos') AND cust_first_name = 'Abigail';--Cost: 6
+
+  DROP TABLE customers_temp;
+  ```
+
+- Bitmap index indexes NULL values also
+- Can be used for parallel DML and parallel queries. No issue with that.
+- `Bitmap Join indexes` are useful for multiple table reads. Useful when multiple tables are always read together and no clusters are created for that.
+
+  - Bitmap Join Indexes need less space than materialized views.
+
+  ```sql
+  CREATE BITMAP INDEX sales_temp_bjx ON sales(P.prod_subcategory, C.cust_city)
+  FROM sales S, products P, customers C
+  WHERE S.prod_id = P.prod id
+  AND S.cust id = C.cust id
+  LOCAL; -- LOCAL because it is a partitioned table. Here, sales table is called fact table (main table). products and customers tables are called dimension tables
+  ```
+
+  - Disadvantages of Bitmap Join indexes
+    - Maintenance Cost is higher
+    - Only one table among the indexed tables can be updated concurrently by different transactions
+    - Parallel DML is only supported on the fact table
+    - The joined columns of dimension table needs to have a unique or primary key constraint
+    - If Dimension table has a multi-column primary key, each column of that PK must be in the join
+    - No table can be joined twice in the index
+    - Bitmap join indexes cannot be created on temporary tables
+
+```sql
+ALTER TABLE customers ENABLE VALIDATE CONSTRAINT customers_pk;
+
+ALTER TABLE products ENABLE VALIDATE CONSTRAINT products_pk;
+
+SELECT AVG(S.quantity_sold) FROM sales S, products P, customers C
+WHERE S.prod_id = P.prod_id AND S.cust_id = C.cust_id AND P.prod_subcategory = 'CD-ROM' AND C.cust_city = 'Manchester'; -- This query increased performance after creating below bitmap join index
+
+CREATE BITMAP INDEX sales_temp_bjx ON sales(P.prod_subcategory, C.cust_city) FROM sales S, products P, customers C
+WHERE S.prod_id = P.prod_id AND S.cust_id = C.cust_id LOCAL;
+
+DROP INDEX sales_temp_bjx;
+
+SELECT DISTINCT C.cust_postal_code
+FROM sales S, products P, customers C
+WHERE S.prod_id = P.prod_id
+AND S.cust_id = C.cust_id
+AND C.cust_city = 'Manchester';-- This does not increased the performance much even after creating below bitmap index. Reason is we select columns from dimension table so it cannot find the ROWID of that from the index. Index stores only the ROWID of fact table.
+
+CREATE BITMAP INDEX sales_temp_bjx ON sales(C.cust_city)
+FROM sales S, products P, customers C
+WHERE S.prod_id = P.prod_id
+AND S.cust_id = C.cust_id
+LOCAL;
+
+SELECT DISTINCT S.channel_id
+FROM sales S, products P, customers C
+WHERE S.prod_id = P.prod_id
+AND S.cust_id = C.cust_id
+AND C.cust_city = 'Manchester';--Have better performance because the column is from fact table
+
+SELECT COUNT(*)
+FROM sales S, products P, customers C
+WHERE S.prod_id = P.prod_id
+AND S.cust_id = C.cust_id
+AND C.cust_city = 'Manchester';-- This is also faster as it did not need to read anything from the table.
+
+DROP INDEX sales_temp_bjx;
+
+ALTER TABLE customers ENABLE NOVALIDATE CONSTRAINT customers_pk;
+
+ALTER TABLE products ENABLE NOVALIDATE CONSTRAINT products_pk;
+```
+
+- Bitmap is usually easier to remove and re-create but maintaining is hard.
+- Not suitable for concurrent transactions modifying the indexes column. So it is not much suitable for OLTP transactions. It is useful for data warehousing (OLAP) where read is more than writing.
+
+  - OLTP Use Cases: OLTP systems are found in practically every system that interacts with customers. Some examples of common transactional processing scenarios where OLTP systems are used are ATM and Online Banking, Payment Processing, Online Booking, Recordkeeping.
+  - OLAP Use Cases: Every branch of business that benefits from data analysis have an OLAP system. Analytic processing is frequently used in Trend Analysis, Customer Behavior, etc.
+
+| Parameters               | OLTP (online transactional processing)                                                                                                | OLAP(Online analytical processing)                                                                               |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| Process                  | OLTP is an online transactional system for database modification and is characterized by a large number of small online transactions. | It is a process of online analysis and data retrieving and is characterized by working with large amount of data |
+| Method and Functionality | It uses traditional DBMS and is an online databse modifying system                                                                    | OLAP uses data warehouse for online database query management                                                    |
+| Query Types              | Insert, Update, and Delete information from databases                                                                                 | Select Operations                                                                                                |
+| Table type               | Normalized                                                                                                                            | Not normalized                                                                                                   |
+| Data Sources             | OLTP and its transactions are the data sources                                                                                        | The different OLTP databases are the data sources for OLAP                                                       |
+| Data Integrity Concerns  | It is mandatory for OLTP databases to maintain integrity constraint                                                                   | Data integrity is not an issue as OLAP databases do not get frequently modified                                  |
+| Read/ Write Operations   | Allows Read and Write operations                                                                                                      | Allows Read operations and rarely allows write operations                                                        |
+| Response Time            | Milliseconds                                                                                                                          | Seconds to minutes                                                                                               |
+| Use-Cases                | Helps to control and run fundamental business tasks                                                                                   | Planning, problem-solving, and decision support                                                                  |
+| Query Complexity         | Simple and standardized                                                                                                               | Complex queries with aggregations                                                                                |
+| Data Quality             | Database is always detailed and organized.                                                                                            | Data might not always be organized                                                                               |
+| Back-up                  | Complete backup of the data combined with incremental backups                                                                         | OLAP only need a backup from time to time. Backup is not important compared to OLTP                              |
+| Database Design          | Database Design is application oriented, i.e., it changes with industry like Retail, Airline, Banking, etc.                           | DB design is subject oriented, i.e., it changes with subjects like sales, marketing, purchasing, etc.            |
+
+- You need to select Global or Local Index partitioning carefully. When you create partition table with indexes, we can create `Global Index` or `Local Index`.
+  - Global indexes have 1 to many relationship on partitions. ie; an index indexes multiple partitions. In this case, you can perform range and hash scans on multiple partitions. So performing parallel execution increase the performance.
+  - Local index have 1 to 1 relation with partition. ie; Index indexes partition individually. In this case, it cannot perform range scan on multiple partitions with one index. This is easier to maintain. If you are selecting from single partition, local index would be better.
 
 ```sql
 CREATE BITMAP INDEX index_name
 ON table_name(column1[,column2,...]);
 ```
+
+#### Bitmap Operations
+
+- **Bitmap Conversion To ROWID** - Converts the bitmaps to the corresponding ROWIDs. Bitmap doesnot stores all ROWIDs. It stores bitmap and the ROWID intervals of that bitmap. First bit shows first ROWID and last bit shows last ROWID. For other ROWIDs, it need to calculate the ROWIDs
+- **Bitmap Conversion From ROWID** - Generates a bitmap index from b-tree. This happens if the bitmap comparision operators are faster than b-tree indexes.
+- **Bitmap Conversion Count** - Calculates the count by using the index. Here bitmap index can count NULL values as well as it stores NULL values also. If there is a NULLABLE column and we want to find the count of rows, b-tree index uses full table scan. For bitmap index it does not need that.
+- **Bitmap Index Single Value** - Gets a single value by using the index
+- **Bitmap Range Scan** - Performs a range scan over the bitmap index
+- **Bitmap Full Scan** - Reads the whole bitmap to return the result
+- **Bitmap Merge Scan** - Merges multiple bitmaps ( result of a range scan ) into one bitmap
+- **Bitmap AND** - Performs an AND operation over the bits of two bitmaps
+- **Bitmap OR** - Performs an OR operation over the bits of two bitmaps
+- **Bitmap Minus** - Performs an AND operation between a bitmap and the negated version of another bitmap
+- **Bitmap Key Iteration** - Takes each row from a table row source, finds the corresponding bitmaps and merges them
 
 #### When to use Oracle bitmap indexes
 
@@ -180,12 +347,100 @@ Note: If we are selecting only the columns which are existing in index, that dat
 
 ### Sample Table Scan
 
+## Index Rebuild
+
+- Balanced Tree indexes are always balanced. All leaf blocks stays at the same length. The number of blocks required to go from root block to leaf block is called `index height`.
+- While we insert or update some rows, if the leaf block does not have space to store the new value, that block is split into two blocks. And when some rows are removed, there will be unnessasary blocks, branches and leafs. This will decrease the performance.
+- To solve this problem use below methods
+
+```sql
+ALTER INDEX index_name REBUILD; -- Cleaner
+
+ALTER INDEX index_name COALESCE;--Faster
+```
+
+## Index Compression
+
+- If the selectivity of the btree index is low, compressing the index may work faster.
+- If there are lots of redundant data in the index, it might be useful to compress it (Will decrease the size and may increase the performance)
+- Like table compression, there is a token table which stores the redundant keys and a row table that includes the distinct rows
+- Can be applied to unique and non-unique indexes
+- It will work better for non-unique indexes.
+- It eliminates the duplicate keys
+- Composite indexes can be compressed by the first N keys. For example, we can compress the first two columns of the index or we can compress all the columns together; but we cannot compress a specific column of the index which is not the first column.
+- Sometime this compression may not decrease the size or increase the performance. It depends on the number of distict values in your index columns.
+- From Oracle 12C, advanced key compression is introduced.
+
+```sql
+CREATE INDEX ix ON temp(a, b,c) COMPRESS [N]; -- N is the compression level. If it is NULL, then it will compress all the columns
+CREATE INDEX ix ON temp(a, b,c) COMPRESS ADVANCED HIGH LOW; -- From 12C.
+```
+
+- Things to know about index compression:
+  - Column order is important. You need to write the least selective column first. ie; the column, which has the highest number of duplicate values, should be the first column of the index, and the rest also should be written in this logic from highest duplicate to the lowest.
+  - Bitmap indexes cannot be compressed. It can only be applied to B-Tree indexes.
+  - Partitioned indexes cannot be compressed before 11g version. We cannot compress a specific partition directly, but we can do that by creating an index as compressed and then disable the index key compression for the specific partitions.
+  - Can be alternative to bitmap indexes in some cases
+  - Indexes are created as non-compressed by default
+
+```sql
+CREATE TABLE sales_temp AS SELECT * FROM sales;
+
+CREATE INDEX sales_idx ON sales_temp(prod_id,cust_id,time_id,amount_sold);
+
+SELECT BYTES/(1024*1024) mb FROM user_segments WHERE  segment_name = 'SALES_IDX';
+/*Index size*/
+--Before Compression: 32MB
+--Compress 1st column: 28MB
+--Compress first 2 columns: 28MB
+--Compress first 3 columns: 33MB
+--Compress first all columns: 36MB
+--Compress LOW: 28MB
+--Compress HIGH: 15MB
+
+SELECT index_name, index_type, leaf_blocks, compression FROM user_indexes
+WHERE index_name = 'SALES_IDX';
+
+SELECT prod_id,cust_id,time_id FROM sales_temp
+WHERE prod_id = 13;
+/*Cost*/
+--Before Compression: 57
+--Compress 1st column: 51
+--Compress first 2 columns: 51
+--Compress first 3 columns: 59
+--Compress first all columns: 64
+--Compress LOW: 50
+--Compress HIGH: 2
+
+ALTER INDEX sales_idx REBUILD COMPRESS 1;--Compress 1st column
+
+ALTER INDEX sales_idx REBUILD COMPRESS 2;--Compress first 2 columns; Concatenation of 2 columns to find the duplicates
+
+ALTER INDEX sales_idx REBUILD COMPRESS 3;--Compress first 3 columns; Concatenation of 3 columns to find the duplicates
+
+ALTER INDEX sales_idx REBUILD COMPRESS;--Compress all columns; Concatenation of all columns to find the duplicates
+
+ALTER INDEX sales_idx REBUILD COMPRESS ADVANCED LOW;
+
+ALTER INDEX sales_idx REBUILD COMPRESS ADVANCED HIGH; -- More CPU and more maintenance cost is there than ADVANCED LOW. It may decrease the performance of the table when performing DML operations. More suitable for datawarehousing or for tables does not have much DML operations.
+
+DROP INDEX sales_idx;
+CREATE BITMAP INDEX sales_idx ON sales_temp(prod_id,cust_id,time_id,amount_sold); --More cost than the compressed B-Tree index
+
+DROP INDEX sales_idx;
+CREATE BITMAP INDEX sales_idx ON sales_temp(prod_id,cust_id,time_id,amount_sold) COMPRESS;--Compression doesnot work on bitmap index
+
+DROP TABLE sales_temp;
+```
+
 ## Index Access Paths
 
 ### Index Unique Scan
 
 - A single row will be fetched.
 - This scan will be performed on primary key or unique index column
+- If the column is unique and not using unique index will make the optimizer to use range scan.
+- Note: It may show as RANGE SCAN on explain plan but it may be doing unique scan. So check for range in explain plan to confirm it is range scan or unique scan.
 
 ### Index Range Scan
 
@@ -1282,3 +1537,305 @@ select employee_id, first_name, last_name, department_id, salary,
 from employees
 order by employee_id;--Cost: 4; Read Employees table once
 ```
+
+## Composite Indexes
+
+- Composite indexes are the ones created for multiple columns
+- Maximum if 32 columns can be combined for b-tree index and 30 columns for bitmap index
+- Advantages of composite indexes:
+  - Higher Selectivity
+  - Less I/O; If the columns are there in index already, it does not need to read from table
+  - Can be used for one or multiple columns. So even if we don't use all the columns, it can make use of the index.
+    -But if we donot include the first column in the index, it may perform index skip scan or index full scan. But that is not guaranteed.
+    - Even if it perform index skip scan or index full scan, it will be slower than index range scan.
+    - What if our work clause includes first and third columns of the index?
+      In this case, the optimizer will check the selectivity of the first column.If it is selective enough, it will read from the index by using the first column and then perform a filter predicate with the third column because they are not consecutive.
+    - But if you select the first and second columns this time, it will select for the concatenation of these two columns, and this will be faster than the previous one.
+- Selecting the column order is important in composite indexes
+- You should put most queried condition column as first and then second and so on. If multiple columns are used in same priority, you should put more selective column first and the next and so on
+
+## Covering Indexes
+
+- It is not an actual index type
+- An index including all the columns of the query is called `covering index` for that query
+- Benefits of covering indexes:
+  - There is no need to look up the data in the table
+  - Needs less I/O operations
+- Drawbacks of covering indexes:
+  - Increase the index size
+  - Will be used for fewer queries
+  - Maintenance cost increases
+
+## Reverse key index
+
+- Simultaneous inserts/updates from multiple instances on the indexed tables may have performance problems because of the index maintenance (especially for the sequential va lues)
+- Sequential value inserts may cause contention in the index blocks with some waits or locks
+- Reverse key index is not an index used by reverse function on the indexed column!
+- Reverse key indexes store the bytes of the indexed columns in reverse order (ROWIDs are not reversed)
+- Reversing the bytes will lead the database to store them in different index blocks
+- Drawbacks of reverse key indexes :
+  - It works with only the equality searches. So range scan or skip scan won't work here
+  - It uses more CPU to reverse the key values
+
+```sql
+CREATE INDEX ix ON temp(a,b) REVERSE;
+```
+
+## Index-Organized tables
+
+- Store the non-key columns as well, in the index leaves
+- There is not a table in addition to an index. Just the index. If we add b-tree index for all the columns for a table, it will use much storage than the original table and it also uses storage for the actual table also. Here it is just index.
+- Store the rows in the order of primary key values. (Heap organized tables (normal table) are not ordered in the table)
+- It reads faster than the ordinary indexes over the primary key values
+- The changes are only over the index (since there is no table)
+- It needs less storage (no duplicate columns or rows)
+- Have full-functionality of ordinary tables (all the objects including indexes can be created over index-organized tables)
+- Primary keys can be composite key
+- Restrictions & Disadvantages of ITs (Index-Organized Tables) :
+  - Cannot create IOTs with a bitmap index.
+  - Needs to have a unique primary key
+  - Can have max 1000 columns (255 in index portion - rest in the overflow segment)
+  - Primary keys can have max 32 columns
+  - Cannot contain virtual columns
+  - PCTTRESHOLD size cannot be larger than 50% of the index block
+  - Faster in updates but slower in inserts. Head organized table will put inserted row into random block. But IOT need to keep the order of the primary key.
+  - There is no physical rowid in IOTs.There are logical rowids. Because the ROWID always change as it need to keep the order.
+  - Secondary indexes use logical rowids which makes it work slower
+- When to use IOTs
+  - If the WHERE clauses mostly have the primary key column, but SELECT clause queries for other columns as well
+  - Queries returning for small number of rows
+  - If the table data is not so often changing (not much inserts)
+  - If you don't need additional indexes over the IOTs
+  - If the table is small in both row count and column count
+  - If an index already needs the majority of the columns
+
+```sql
+CREATE TABLE customers _iot (cust _id NUMBER,
+cust first name VARCHAR2(20),
+cust last name VARCHAR2(40),
+cust_gender
+CHAR(1),
+cust year of birth
+NUMBER (4,0),
+cust marital status
+VARCHAR2 (20),
+CONSTRAINT cid pk PRIMARY KEY (cust id))
+ORGANIZATION INDEX
+TABLESPACE iot_tbs
+PCTTHRESHOLD 20 -- Specifies the mazimum length of a row in the index block size. Here it says it cannot exceed 20% of the block size. If it exeeds it will store in  OVERFLOW TABLESPACE. If the first 3 columns fills the 20%, it will store the rest in overflow tablespace so if you want to get these columns, it will be slower than the first three columns.
+INCLUDING cust_year_of_birth -- If you want some non-key columns to store in index area. So if you select these columns with primary key column, it will not go to overflow tablespace and it will improve the performance. If the columns in including clause also exit the PCT threshold size, some columns from including columns will be stored in overflow tablespace.
+OVERFLOW TABLESPACE iot_tbs2:
+
+```
+
+```sql
+CREATE TABLE customers_temp AS
+SELECT cust_id,cust_first_name,cust_last_name,cust_gender,cust_year_of_birth,
+cust_marital_status,cust_postal_code,cust_city_id,cust_credit_limit FROM customers;
+
+CREATE INDEX cus_ix ON customers_temp(cust_id);
+
+CREATE TABLE customers_iot (cust_id NUMBER,
+cust_first_name VARCHAR2(20),
+cust_last_name VARCHAR2(40),
+cust_gender CHAR(1),
+cust_year_of_birth NUMBER(4,0),
+cust_marital_status VARCHAR2(20),
+cust_postal_code VARCHAR2(10),
+cust_city_id NUMBER,
+cust_credit_limit NUMBER,
+CONSTRAINT cid_pk PRIMARY KEY (cust_id))
+ORGANIZATION INDEX
+PCTTHRESHOLD 40;
+
+INSERT INTO customers_iot SELECT cust_id,cust_first_name,cust_last_name,cust_gender,cust_year_of_birth,
+cust_marital_status,cust_postal_code,cust_city_id,cust_credit_limit FROM customers;
+
+/
+SELECT * FROM customers_temp WHERE cust_id = 47006; -- Cost 2
+SELECT * FROM customers_iot WHERE cust_id = 47006; -- Cost 1; IOT table
+SELECT * FROM customers_temp WHERE cust_id BETWEEN 5000 AND 5050; -- Cost 29
+SELECT * FROM customers_iot WHERE cust_id BETWEEN 5000 AND 5050; -- Cost 5; IOT table
+SELECT * FROM customers_temp WHERE cust_id BETWEEN 5000 AND 10000; -- Cost: 109; Full table scan
+SELECT * FROM customers_iot WHERE cust_id BETWEEN 5000 AND 10000; -- Cost 5
+SELECT * FROM customers_temp WHERE cust_year_of_birth = 1978; -- Non primary key column in WHERE clause; Full table scan; Cost 110
+SELECT * FROM customers_iot WHERE cust_year_of_birth = 1978;-- Non primary key column in WHERE clause; Fast full scan; Cost 238
+
+DROP TABLE customers_temp;
+DROP TABLE customers_iot;
+```
+
+## Invisible Indexes
+
+- Creating index will take time. So in order to not affecting the performance, you can create new index as invisible and then make the original one invisible and then make the new one visible.
+- Reasons to make an index invisible :
+  - Compare the performance with the new one before changing it
+  - Check if dropping that index results in some problems
+- Invisible indexes are also alive like the visible indexes. But the optimizer ignores them
+- OPTIMIZER_USE_INVISIBLE_INDEXES parameter can be set to TRUE to make the optimizer use the invisible indexes. By default it is FALSE
+- Invisible indexes are maintained by the database
+
+```sql
+SELECT * FROM user indexes WHERE visibility = 'INVISIBLE';
+ALTER INDEX ix INVISIBLE;
+ALTER INDEX ix VISIBLE;
+CREATE INDEX ix ON TEMP(a,b) INVISIBLE;
+```
+
+```sql
+create table customers_temp as select * from customers;
+
+select * from customers_temp;
+
+create index name_idx on customers_temp(cust_first_name,cust_last_name);
+
+select * from customers_temp where cust_first_name = 'Arnold';
+
+alter index name_idx invisible;
+alter index name_idx visible;
+
+create bitmap index name_bidx on customers_temp(cust_first_name,cust_last_name);
+
+drop table customers_temp;
+```
+
+## Full-Text search indexes
+
+- As you know, we can perform search operations all over the indexes by using the like operator. However, this is not so efficient in so many cases.
+- To solve such performance problems, Oracle developed the full text indexing in Oracle text.
+- Actually Oracle text, previously known as intermediate text or context, is a very detailed subject.
+- Oracle text is an extensive full text indexing technology, which allows us to perform free text queries in various ways.
+- There are three types of Oracle text indexes. They aim to different type of searches.
+
+### CONTEXT Type Index
+
+- Performs search operations over large documents (PDF, MS Word, XML, HTML, Plain Text)
+- Converts the words in the documents into tokens
+- Documents are stored in BLOB or CLOB type columns
+
+```sql
+CREATE TABLE my_doc (id NUMBER (10) NOT NULL,
+name VARCHAR2 (200) NOT NULL,
+document BLOB NOT NULL);
+
+CREATE INDEX my_doc_idx ON my_docs(document) INDEXTYPE IS CTXYS.CONTEXT;
+
+SELECT name FROM my_doc WHERE CONTAINS (document, 'Search Text') > 0;
+
+SELECT SCORE(1) score, name FROM my_doc
+WHERE CONTAINS (document,'Search Text', 1) > 0
+ORDER BY SCORE (1) DESC;
+```
+
+- Score Operator returns the relevance score of the row for the specified search text
+- This score is calculated based on Salton's frequency formula.
+
+### CTXCAT Type Index
+
+- Ideal for smaller documents or text fragments
+- Larger than the context index and takes longer to build
+- It creates indexes over the index sets
+
+```sql
+EXEC CTX_DDL.CREATE_INDEX_SET('products_iset');
+
+EXEC CTX_DDL.ADD_INDEX('products_iset', 'prod_list_price');
+
+CREATE INDEX my_products_name idx ON products (prod desc) INDEXTYPE IS CTXSYS.CTXCAT PARAMETERS ('index set products_iset');
+
+SELECT prod_id, prod_list_price, prod_name, prod_subcategory FROM products WHERE CATSEARCH (prod_desc,'CD', 'prod_list_price > 10' > 0;
+```
+
+### CTXRULE Type Index
+
+- Used to build a document classification application
+- Documents inside of the table are classified based on their contents
+- Used for the category searches
+
+```sql
+CREATE INDEX temp_rule ON temp_table(text) INDEXTYPE IS CTXSYS.CTXRULE;
+
+SELECT CLASSIFICATION FROM temp_table
+WHERE matches (text, 'Lionel Messi is a famous footballer from Argentina') > 0;
+```
+
+```sql
+--CTXCAT Type
+GRANT EXECUTE ON ctxsys.ctx_ddl TO sh;
+
+CREATE TABLE products_temp AS SELECT * FROM products;
+
+EXEC ctx_ddl.create_index_set('products_iset'); -- Create an index set to store sub indexes
+
+EXEC ctx_ddl.add_index('products_iset','prod_list_price'); -- Create subindex
+
+--EXEC CTX_DDL.REMOVE_INDEX('products_iset','price'); -- To remove sub index
+
+CREATE INDEX my_products_name_idx ON products_temp(prod_desc) INDEXTYPE IS ctxsys.ctxcat
+PARAMETERS ('index set products_iset');
+
+SELECT prod_id, prod_list_price, prod_name,prod_subcategory,prod_desc
+FROM   products_temp
+WHERE  catsearch(prod_desc, 'CD', 'prod_list_price > 10')> 0;
+```
+
+![](img/2023-01-10-04-34-47.png)
+![](img/2023-01-10-04-34-15.png)
+
+```sql
+SELECT prod_id, prod_list_price, prod_name,prod_subcategory,prod_desc FROM products
+WHERE prod_desc LIKE '%CD%' AND prod_list_price > 10;
+
+```
+
+![](img/2023-01-10-04-35-47.png)
+![](img/2023-01-10-04-36-45.png)
+
+```sql
+
+DROP INDEX my_products_name_idx;
+DROP TABLE products_temp;
+
+----CTXRULE Type
+CREATE TABLE temp_table(CLASSIFICATION VARCHAR2(50),text VARCHAR2(2000));
+
+INSERT INTO temp_table VALUES('US Politics', 'democrat or republican');
+INSERT INTO temp_table VALUES('Music', 'ABOUT(music)');
+INSERT INTO temp_table VALUES('Football', 'footballer');
+INSERT INTO temp_table VALUES('Countries', 'United States or Great Britain or Argentina');
+INSERT INTO temp_table VALUES('Names', 'Lionel NEAR Messi OR David or Ronaldo');
+
+CREATE INDEX temp_rule ON temp_table(text) INDEXTYPE IS ctxsys.ctxrule;
+
+SELECT CLASSIFICATION FROM temp_table WHERE matches(text, 'Lionel Messi is a famous footballer from Argentina') > 0;
+
+```
+
+![](img/2023-01-10-04-41-19.png)
+![](img/2023-01-10-04-42-08.png)
+
+```sql
+
+EXEC ctx_ddl.drop_index_set('products_iset');
+DROP TABLE temp_table;
+
+```
+
+https://docs.oracle.com/cd/A64702_01/doc/cartridg.805/a63821/ling.htm#7641
+https://docs.oracle.com/cd/A64702_01/doc/cartridg.805/a63821/know.htm#38324
+
+- These indexes are very big and complex in comparison to the standard indexes. So it might be very costly to maintain these indexes because it needs to have a full table scan and lots of internal parsing operations. Because of that, it is not so practical to update these indexes for each change in the base tables. Actually most of them are not updated automatically by default, but we can synchronize these indexes manually. We can execute:
+
+```sql
+EXEC CTX_DDL.SYNC_INDEX('my_docs_idx');
+```
+
+- This is the fastest way. However, in time, the index structure will not be so optimal.It is recommend you to optimize your index periodically by using the optimize index package.
+
+```sql
+EXEC CTX_DDL.OPTIMIZE_INDEX('my_docs_idx', 'FULL'); -- FAST|FULL|TOKEN
+```
+
+- The **FAST mode** compacts the fragmented rows but doesn't remove the old data. So it is fast
+- **Full mode** rebuilds the entire index or a portion of it, but it removes the old data
+- **Token** performs full optimization for a specific token.
