@@ -698,6 +698,23 @@ ALTER TABLE IRD_TXN_DTS_AUD SPLIT PARTITION "PMAX" VALUES
 - Partitioning allows tables, indexes and index-organized tables to be subdivided into smaller pieces, enabling these database objects to be managed and accessed at a finer level of granularity (Indexing will be ineffective for large amount of data).
 - Partition pruningis the act of eliminating, or ignoring partitions that are irrelevant to the SQL statements' selection criteria
 - Mainly used in data warehousing area (More `SELECT` less DML)
+- Increases performance by only working on the data that is relevant.
+- Improves availability through individual partition manageability.
+- Decreases costs by storing data in the most appropriate manner.
+- Is easy as to implement as it requires no changes to applications and queries.
+- Is a mature, well proven feature used by thousands of Oracle customers.
+
+- Oracle supports a wide array of partitioning methods:
+  - **Range Partitioning** - the data is distributed based on a range of values.
+  - **List Partitioning** The data distribution is defined by a discrete list of values. One or multiple columns can be used as partition key.
+  - **Auto-List Partitioning** - extends the capabilities of the list method by automatically defining new partitions for any new partition key values.
+  - **Hash Partitioning** - an internal hash algorithm is applied to the partitioning key to determine the partition.
+  - **Composite Partitioning** - combinations of two data distribution methods are used. First, the table is partitioned by data distribution method one and then each partition is further subdivided into subpartitions using the second data distribution method.
+  - **Multi-Column Range Partitioning** - an option for when the partitioning key is composed of several columns and subsequent columns define a higher level of granularity than the preceding ones.
+  - **Interval Partitioning** - extends the capabilities of the range method by automatically defining equi-partitioned ranges for any future partitions using an interval definition as part of the table metadata.
+  - **Reference Partitioning Partitions** - a table by leveraging an existing parent-child relationship. The primary key relationship is used to inherit the partitioning strategy of the parent table to its child table.
+  - **Virtual Column Based Partitioning** - allows the partitioning key to be an expression, using one or more existing columns of a table, and storing the expression as metadata only.
+  - **Interval Reference Partitioning** - an extension to reference partitioning that allows the use of interval partitioned tables as parent tables for reference partitioning.
 
 ### List Partition
 
