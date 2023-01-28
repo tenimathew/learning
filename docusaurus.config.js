@@ -104,6 +104,7 @@ const config = {
         copyright: `Copyright © ${new Date().getFullYear()} My Learning, Inc. Built with Docusaurus.`,
       },
       prism: {
+        additionalLanguages: ["java"],
         theme: lightCodeTheme,
         darkTheme: darkCodeTheme,
       },

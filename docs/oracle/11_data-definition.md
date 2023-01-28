@@ -140,7 +140,9 @@ ALTER TABLE persons RENAME TO people;
 ## RENAME
 
 ```sql
-RENAME table_name TO new_name;
+RENAME table_name TO new_name,
+       table_name1 TO new_name1,
+       table_name2 TO new_name2;
 ```
 
 When you rename a table, Oracle automatically transfers indexes, constraints, and grants on the old table to the new one. In addition, it invalidates all objects that depend on the renamed table such as views, stored procedures, function, and synonyms.
