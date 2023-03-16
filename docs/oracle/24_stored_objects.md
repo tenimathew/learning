@@ -121,10 +121,32 @@ GET_CUSTOMER_ORDERS(124, THEORDERS);
 ## PL/SQL Packages
 
 - Package is a collection of related variables, constants, exceptions, cursors, and subprograms.
-- Objects placed in the specification are calledpublic objects.
+- A package is loaded into the memory on the first call.Public objects and public variables are copied into PGA and the subprograms are copied into SGA.
+- If a cursor is opened and not closed, the call to FETCH statement in the same session will pick the next row in the cursor. If it a different session, it will show the first one.
+
+```sql
+declare
+    v_emp employees%rowtype;
+begin
+    open constants_pkg.cur_emps;
+    fetch constants_pkg.cur_emps into v_emp;
+    dbms_output.put_line(v_emp.first_name);
+    --close constants_pkg.cur_emps;
+end;
+-----------------
+declare
+    v_emp employees%rowtype;
+begin
+    fetch constants_pkg.cur_emps into v_emp;
+    dbms_output.put_line(v_emp.first_name);
+end;
+```
+
+- Uninitialized variables are NULL by default
+- Objects placed in the specification are called public objects.
 - Any objects (subprogram or variable) which are not coded in the package specification but coded in the package body is called a private object.
 - Only the objects inside the package can call a **private object**.
-- **Global Variables**: Global variables can be defined by creating body less package. Whenever a package is loaded, whole package (including variables) will be loaded into the memory for easy access. It won’t be destroyed until the package is complete. These public variables in the package specification can be accessed directly fromother programs. It is useful to declare constants.
+- **Global Variables**: Global variables can be defined by creating body less package. Whenever a package is loaded, whole package (including variables) will be loaded into the memory for easy access. It won’t be destroyed until the package is complete. These public variables in the package specification can be accessed directly from other programs. It is useful to declare constants.
 
 ```sql
 CREATE OR REPLACE PACKAGE pkg_var IS
@@ -186,7 +208,9 @@ END;
 
 ## One-time only procedure
 
-- This procedure will be executed only once per session.
+- Package initialization works like a constructor. You can add anything you want to do first when that package is called.
+- This procedure will be **executed only once per session** or after the package is recompiled.
+- If any variables are initialized before (in package specification) and are again initializing in this block. The initialization in this package will override the other initialization
 
 ```sql
 CREATE OR REPLACE PACKAGE BODY package_name IS
@@ -202,9 +226,20 @@ END package_name; --The END of one time only procedure should be the END of pack
 ## AUTHID
 
 - The `AUTHID CURRENT_USER` is used when you want a piece of code to execute with the privileges of the current user, and not with the privilege of the user who defined the PL/SQL code.
-- `AUTHID DEFINER` is exactly opposite to `AUTHID CURRENT_USER`. Using this clause is as same as granting public access to the PL/SQL code.
+- `AUTHID DEFINER` (Definer's Rights) is exactly opposite to `AUTHID CURRENT_USER` (Invoker's Rights). Using this clause is as same as granting public access to the PL/SQL code.
 - If no AUTHID clause is specified Oracle will default to `AUTHID DEFINER`.
 - It is suggestible to set `AUTHID` clause. If not, an intruder may get access to privileges of the definer which an intruder should not get.
+- Scenario:
+
+  - Two schemas have tables with same name
+  - Created a procedure for insert operation in schema 1 with invoker's right
+  - Called the procedure from schema 2
+  - This will insert data into schema 2's table
+  - If there is no table with that name in schema 2, it will throw error
+
+  - If I create the procedure with Definer's right
+  - Called the procedure from schema 2
+  - This will insert data into schema 1's table
 
 ```sql
 CREATE OR REPLACE PROCEDURE create_dept(v_deptno NUMBER)
@@ -215,15 +250,80 @@ BEGIN
 END;
 ```
 
+```sql
+-- TEMP_USER Worksheet Code
+CREATE TABLE temp_table (temp_column VARCHAR2(100));
+/
+GRANT CREATE PROCEDURE, CREATE VIEW TO temp_user;
+/
+CREATE OR REPLACE PROCEDURE insert_into_temp_table (insert_value IN VARCHAR2) IS
+BEGIN
+    INSERT INTO temp_table VALUES (insert_value);
+END;
+/
+GRANT EXECUTE ON insert_into_temp_table TO hr;
+/
+SELECT * FROM temp_table;
+/
+EXEC temp_user.insert_into_temp_table('User: TEMP_USER --> Procedure: Definer''s Rights');
+/
+CREATE OR REPLACE PROCEDURE insert_into_temp_table (insert_value IN VARCHAR2) AUTHID CURRENT_USER IS
+BEGIN
+    INSERT INTO temp_table VALUES (insert_value);
+END;
+/
+EXEC temp_user.insert_into_temp_table('User: TEMP_USER --> Procedure: Invoker''s Rights');
+/
+SELECT object_name,object_type,status FROM user_objects where object_name = 'INSERT_INTO_TEMP_TABLE';
+DROP TABLE temp_table;
+/
+DROP PROCEDURE insert_into_temp_table;
+/
+CREATE TABLE temp_table2 (temp_column VARCHAR2(100));
+INSERT INTO temp_table2 values('View Test: Temp Table in TEMP_USER');
+/
+CREATE OR REPLACE FUNCTION get_last_record_from_temp_table RETURN VARCHAR2 AUTHID CURRENT_USER IS
+temp_text VARCHAR2(100);
+BEGIN
+    SELECT temp_column INTO temp_text FROM temp_table2 WHERE ROWNUM = 1;
+    RETURN temp_text;
+END;
+/
+CREATE OR REPLACE VIEW temp_view BEQUEATH DEFINER AS -- "BEQUEATH DEFINER" is the default
+    SELECT get_last_record_from_temp_table temp_text FROM dual;
+/
+GRANT SELECT ON temp_view TO HR;
+/
+CREATE OR REPLACE VIEW temp_view BEQUEATH CURRENT_USER AS
+    SELECT get_last_record_from_temp_table temp_text FROM dual;
+/
+DROP VIEW temp_view;
+DROP FUNCTION get_last_record_from_temp_table;
+DROP TABLE temp_table2;
+
+-- HR USER Worksheet Code:
+CREATE TABLE temp_table (temp_column VARCHAR2(100));
+INSERT INTO temp_user.temp_table VALUES ('User: HR --> Direct Insert - INSERT Privilege for Temp_user''s table: No');
+EXEC temp_user.insert_into_temp_table('User: HR --> Procedure: Definer''s Rights - INSERT Privilege for Temp_user''s table: No');
+SELECT * FROM temp_table;
+SELECT * FROM temp_user.temp_table;
+EXEC temp_user.insert_into_temp_table('User: HR --> Procedure: Invoker''s Rights - INSERT Privilege for Temp_user''s table: No');
+DROP TABLE temp_table;
+SELECT * FROM temp_user.temp_view;
+SELECT * FROM temp_user.temp_table2;
+```
+
 ## Persistent State of Packages
 
 ```sql
 PRAGMA SERIALLY_REUSABLE
 ```
 
+- Using this, you can make the public variables and objects store in SGA instead of storing it in PGA.
+- Reason to do this is to save some memory. For every user, this public variables and objects are copied into their PGA. So the memory consumption of PGA increases.
 - This pragma is appropriate for packages that declare large temporary work areas that are used once and not needed during subsequent database calls in the same session.
 - You can mark a bodiless package as serially reusable. If a package has a spec and body, you must mark both. You cannot mark only the body.
-- The global memory for serially reusable packages is pooled in the System Global Area (SGA), not allocated to individual users in the User Global Area (UGA). That way, the package work area can be reused. When the call to the server ends, the memory is returned to the pool. Each time the package is reused, its public variables are initialized to their default values or to NULL.
+- The global memory for serially reusable packages is pooled in the System Global Area (SGA), not allocated to individual users in the User Global Area (UGA). That way, the package work area can be reused. When the call to the server ends (END keyword), the memory is returned to the pool. Each time the package is reused, its public variables are initialized to their default values or to NULL. So, if you try to use or print the variable you have changed inside the call, it will show whatever you have assigned. But when the call finishes, it will return to the initial value.
 - Serially reusable packages cannot be accessed from database triggers or other PL/SQL subprograms that are called from SQL statements. If you try, Oracle generates an error.
 
 - The following example creates a serially reusable package:
