@@ -46,6 +46,15 @@ SELECT product_name,
 FROM products
 ORDER BY gross_profit DESC;
 ```
+## Pronunciation
+|          | Indian       | British      | American    |
+|----------|--------------|--------------|-------------|
+| [Alias](https://www.google.com/search?q=Alias+Pronunciation)| ay.lee.uhs   | ay.lee.uhs   | ay.lee.uhs  |
+| [Database](https://www.google.com/search?q=Database+Pronunciation) | day·tuh·bays | day·tuh·bays | da·tuh·bays |
+| [Query](https://www.google.com/search?q=Query+Pronunciation)    | kveh.ree     | kweeuh.ree   | kwee.ree    |
+| [Oracle](https://www.google.com/search?q=Oracle+Pronunciation)   | uh.ra.kl     | o.ruh.kl     | aw.ruh.kl   |
+| [Apex](https://www.google.com/search?q=Apex+Pronunciation)     | ay.peks      | ay.peks      | ay.peks     |
+| [Gigabyte](https://www.google.com/search?q=Gigabyte+Pronunciation) | gi.guh.bite  | gi.guh.bite  | gi.guh.bite |
 
 ## ALIAS
 
