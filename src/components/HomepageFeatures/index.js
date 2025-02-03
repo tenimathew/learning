@@ -13,7 +13,7 @@ const FeatureList = [
     //     used to get your website up and running quickly.
     //   </>
     // ),
-    description: "/docs/oracle",
+    description: "/learning/docs/category/oracle",
   },
   {
     title: "Web Designing",
