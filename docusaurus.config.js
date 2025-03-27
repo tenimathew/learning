@@ -8,8 +8,8 @@ const darkCodeTheme = require("prism-react-renderer/themes/dracula");
 const config = {
   title: "My Learning",
   tagline: "Learn something new every day",
-  url: "https://tenimathew.github.io",
-  baseUrl: "/learning/",
+  url: "https://tenimathew.github.io/learning",
+  baseUrl: "/",
   trailingSlash: false,
   onBrokenLinks: "warn", //"throw",
   onBrokenMarkdownLinks: "warn",
