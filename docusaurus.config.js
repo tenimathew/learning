@@ -8,8 +8,9 @@ const darkCodeTheme = require("prism-react-renderer/themes/dracula");
 const config = {
   title: "My Learning",
   tagline: "Learn something new every day",
-  url: "https://tenimathew.github.io/learning/",
-  baseUrl: "/",
+  url: "https://tenimathew.github.io",
+  baseUrl: "/learning/",
+  trailingSlash: false,
   onBrokenLinks: "warn", //"throw",
   onBrokenMarkdownLinks: "warn",
   favicon: "img/favicon.ico",
@@ -35,6 +36,8 @@ const config = {
       /** @type {import('@docusaurus/preset-classic').Options} */
       ({
         docs: {
+          path: 'docs',
+          routeBasePath: '/',
           sidebarPath: require.resolve("./sidebars.js"),
           // Please change this to your repo.
           // Remove this to remove the "edit this page" links.
